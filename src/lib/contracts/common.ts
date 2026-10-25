@@ -16,6 +16,9 @@ export type ServiceType = z.infer<typeof serviceTypeSchema>;
 
 export const MAX_HOURLY_RATE_CENTS = 100_000_00; // 100,000.00 per hour
 export const MAX_ITEM_HOURS = 1_000;
+// Upper bound for any computed amount (1,000,000.00). Keeps values well inside
+// the INTEGER money columns and within a single checkout.
+export const MAX_QUOTE_TOTAL_CENTS = 100_000_000;
 
 // Integer cents, e.g. 5000 = 50.00.
 export const centsSchema = z.int().nonnegative();

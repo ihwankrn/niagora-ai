@@ -15,7 +15,7 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 | Endpoint | Kontrak | Implementasi |
 |---|---|---|
 | `POST /api/briefs/analyze` | ✅ disepakati | Route handler ada, unit-tested; belum diuji live (Claude + sesi login) |
-| `POST /api/quotes/calculate` | ✅ disepakati | Tahap 5 |
+| `POST /api/quotes/calculate` | ✅ disepakati | ✅ Route handler ada, unit-tested, 401 diuji live |
 | `POST /api/proposals` | ✅ disepakati | Tahap 6 |
 | `GET /api/proposals` | ✅ disepakati | Tahap 6 |
 | `GET /api/proposals/:id` | rencana | Tahap 6 |
@@ -182,6 +182,9 @@ Kalkulasi harga deterministik. Tidak menyimpan apa pun — dipakai untuk preview
 - `subtotalCents = Σ amountCents`.
 - `totalCents = subtotalCents` (MVP belum ada pajak/diskon).
 - `position` mengikuti urutan array request, mulai 0.
+- Pembulatan dilakukan **per item**, lalu dijumlahkan; total tidak dibulatkan ulang.
+- Total maksimal `100000000` cents (1.000.000,00). Di atas itu → `400 VALIDATION_ERROR` dengan `path: "items"`.
+- Endpoint ini tidak menyimpan apa pun dan wajib login (`401` tanpa sesi).
 
 ---
 
