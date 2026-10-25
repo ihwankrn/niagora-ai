@@ -16,8 +16,8 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 |---|---|---|
 | `POST /api/briefs/analyze` | ✅ disepakati | Route handler ada, unit-tested; belum diuji live (Claude + sesi login) |
 | `POST /api/quotes/calculate` | ✅ disepakati | ✅ Route handler ada, unit-tested, 401 diuji live |
-| `POST /api/proposals` | ✅ disepakati | Tahap 6 |
-| `GET /api/proposals` | ✅ disepakati | Tahap 6 |
+| `POST /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
+| `GET /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
 | `GET /api/proposals/:id` | rencana | Tahap 6 |
 | Endpoint PayPal | rencana | Tahap 7 |
 
@@ -251,7 +251,13 @@ Semua field `/api/quotes/calculate`, ditambah:
 
 `status`: `draft` \| `sent` \| `approved` \| `rejected` \| `paid` \| `cancelled`. Status `paid` hanya di-set server setelah capture PayPal terverifikasi.
 
-Error khusus: `404 NOT_FOUND` jika `briefId` tidak ada atau bukan milik user.
+Error khusus:
+
+- `401 UNAUTHORIZED` tanpa sesi.
+- `404 NOT_FOUND` jika `briefId` tidak ada atau bukan milik user (respons sama untuk keduanya).
+- `400 VALIDATION_ERROR` jika total melebihi batas quote (`path: "items"`).
+
+Item, nominal, dan total disimpan dari hasil quote engine server, lalu dibaca kembali dari database untuk respons. Server juga membuat token acak untuk link klien (dipakai di tahap persetujuan/pembayaran; tidak dikembalikan di respons ini).
 
 ---
 
@@ -265,7 +271,7 @@ Daftar proposal milik user yang sedang login (terbaru dulu) beserta statistik da
 |---|---|---|
 | `limit` | integer? | 1–100, default 20 |
 
-Parameter lain ditolak `400 VALIDATION_ERROR`.
+Parameter lain ditolak `400 VALIDATION_ERROR`. Respons membawa header `Cache-Control: private, no-store`.
 
 ### Response `200`
 
