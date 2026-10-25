@@ -14,7 +14,7 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 
 | Endpoint | Kontrak | Implementasi |
 |---|---|---|
-| `POST /api/briefs/analyze` | ✅ disepakati | Tahap 4 (berikutnya) |
+| `POST /api/briefs/analyze` | ✅ disepakati | Route handler ada, unit-tested; belum diuji live (Claude + sesi login) |
 | `POST /api/quotes/calculate` | ✅ disepakati | Tahap 5 |
 | `POST /api/proposals` | ✅ disepakati | Tahap 6 |
 | `GET /api/proposals` | ✅ disepakati | Tahap 6 |
@@ -121,7 +121,13 @@ Aturan:
 - `totalEstimatedHours` = jumlah `estimatedHours` semua deliverable, dihitung server.
 - Batas: `deliverables` maks 30 item, `clarificationQuestions` dan `assumptions` maks 15 item.
 
-Error khusus: `502 AI_UNAVAILABLE`.
+Error khusus:
+
+- `401 UNAUTHORIZED` — dicek sebelum body dibaca.
+- `429 RATE_LIMITED` — maksimal 20 analisis per user per jam (termasuk percobaan yang gagal).
+- `502 AI_UNAVAILABLE` — LLM gagal, menolak, atau output tidak lolos validasi. Brief tetap tersimpan dengan status `FAILED`; tampilkan tombol coba lagi.
+
+Catatan implementasi: analisis memakai Claude (`claude-opus-5-5`) dengan structured output. Server menetapkan `id`, membulatkan jam ke 2 desimal, membuang deliverable tanpa estimasi yang wajar, lalu memvalidasi hasil dengan schema kontrak sebelum menyimpan.
 
 ---
 
