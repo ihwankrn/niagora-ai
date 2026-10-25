@@ -1,22 +1,23 @@
-# Niagora AI — Kontrak API (v1, draft)
+# Niagora AI — Kontrak API (v1)
 
-Dokumen ini adalah kesepakatan request/response antara Frontend dan Backend.
-Sumber kebenaran ada di Zod schema [`src/lib/contracts/`](../src/lib/contracts/); tipe TypeScript bisa diimpor langsung dari sana:
+Dokumen ini adalah kesepakatan request/response antara Frontend dan Backend, disetujui di [issue #2](https://github.com/ihwankrn/niagora-ai/issues/2).
+Sumber kebenaran ada di Zod schema [`src/lib/contracts/`](../src/lib/contracts/); tipe TypeScript bisa diimpor langsung dari sana (menggantikan `src/types/analysis.ts` setelah branch digabung):
 
 ```ts
-import type { AnalyzeBriefResponse } from "@/lib/contracts/briefs";
+import type { AnalyzeBriefResponse, BriefAnalysis, DeliverableItem } from "@/lib/contracts/briefs";
 import type { Quote, CalculateQuoteRequest } from "@/lib/contracts/quotes";
-import type { Proposal, CreateProposalRequest } from "@/lib/contracts/proposals";
+import type { Proposal, CreateProposalRequest, ListProposalsResponse } from "@/lib/contracts/proposals";
 import type { ApiErrorBody } from "@/lib/contracts/errors";
 ```
 
-Status implementasi:
+Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipanggil):
 
 | Endpoint | Kontrak | Implementasi |
 |---|---|---|
-| `POST /api/briefs/analyze` | ✅ draft | Tahap 4 |
-| `POST /api/quotes/calculate` | ✅ draft | Tahap 5 |
-| `POST /api/proposals` | ✅ draft | Tahap 6 |
+| `POST /api/briefs/analyze` | ✅ disepakati | Tahap 4 (berikutnya) |
+| `POST /api/quotes/calculate` | ✅ disepakati | Tahap 5 |
+| `POST /api/proposals` | ✅ disepakati | Tahap 6 |
+| `GET /api/proposals` | ✅ disepakati | Tahap 6 |
 | `GET /api/proposals/:id` | rencana | Tahap 6 |
 | Endpoint PayPal | rencana | Tahap 7 |
 
@@ -97,11 +98,14 @@ Menganalisis brief klien menjadi deliverables, pertanyaan klarifikasi, asumsi, d
     "analysis": {
       "summary": "Website company profile 5 halaman untuk usaha katering.",
       "deliverables": [
-        { "title": "Desain & layout 5 halaman", "description": "Home, Tentang, Menu, Galeri, Kontak", "estimatedHours": 10 },
-        { "title": "Form kontak", "description": "Validasi dan notifikasi email", "estimatedHours": 3 },
-        { "title": "Galeri foto", "description": "Grid responsif dengan lightbox", "estimatedHours": 4.5 }
+        { "id": "a1b2c3d4-0001-4e2f-9a7b-1c2d3e4f5a6b", "title": "Desain & layout 5 halaman", "description": "Home, Tentang, Menu, Galeri, Kontak", "estimatedHours": 10 },
+        { "id": "a1b2c3d4-0002-4e2f-9a7b-1c2d3e4f5a6b", "title": "Form kontak", "description": "Validasi dan notifikasi email", "estimatedHours": 3 },
+        { "id": "a1b2c3d4-0003-4e2f-9a7b-1c2d3e4f5a6b", "title": "Galeri foto", "description": "Grid responsif dengan lightbox", "estimatedHours": 4.5 }
       ],
-      "clarifyingQuestions": ["Apakah konten dan foto sudah disediakan klien?"],
+      "clarificationQuestions": [
+        "Apakah konten dan foto sudah disediakan klien?",
+        "Apakah perlu fitur pemesanan online? Belum bisa diestimasi tanpa detail alur pemesanan."
+      ],
       "assumptions": ["Hosting dan domain disediakan klien."]
     },
     "totalEstimatedHours": 17.5,
@@ -110,7 +114,12 @@ Menganalisis brief klien menjadi deliverables, pertanyaan klarifikasi, asumsi, d
 }
 ```
 
-Batas: `deliverables` 1–30 item, `clarifyingQuestions` dan `assumptions` maks 15 item. `totalEstimatedHours` dihitung server.
+Aturan:
+
+- Setiap deliverable **selalu** punya `id` (UUID dibuat server), `title`, `description`, dan `estimatedHours`.
+- Pekerjaan yang belum bisa diestimasi secara wajar dari brief **tidak** dimasukkan ke `deliverables` dengan angka karangan. Pekerjaan itu ditanyakan di `clarificationQuestions`. Jadi `deliverables` boleh kosong asalkan `clarificationQuestions` tidak kosong.
+- `totalEstimatedHours` = jumlah `estimatedHours` semua deliverable, dihitung server.
+- Batas: `deliverables` maks 30 item, `clarificationQuestions` dan `assumptions` maks 15 item.
 
 Error khusus: `502 AI_UNAVAILABLE`.
 
@@ -237,8 +246,60 @@ Error khusus: `404 NOT_FOUND` jika `briefId` tidak ada atau bukan milik user.
 
 ---
 
-## Pertanyaan terbuka untuk Frontend
+## `GET /api/proposals`
 
-1. Nama field `serviceType` (bukan `service`) dan nilai lowercase sesuai opsi form — OK?
-2. Tarif diinput dalam satuan mata uang di UI lalu dikonversi ke cents sebelum dikirim — OK?
-3. Perlu endpoint daftar proposal (`GET /api/proposals`) untuk kartu statistik dashboard di MVP?
+Daftar proposal milik user yang sedang login (terbaru dulu) beserta statistik dashboard. Server memfilter berdasarkan sesi; tidak ada parameter untuk memilih user lain.
+
+### Query
+
+| Param | Tipe | Aturan |
+|---|---|---|
+| `limit` | integer? | 1–100, default 20 |
+
+Parameter lain ditolak `400 VALIDATION_ERROR`.
+
+### Response `200`
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "0b8a6c1d-4e2f-4a7b-9c2d-3e4f5a6b3f0e",
+        "title": "Website Company Profile Katering",
+        "clientName": "Katering Bu Sari",
+        "status": "paid",
+        "currency": "USD",
+        "totalCents": 65000,
+        "createdAt": "2026-10-25T11:35:00.000Z"
+      }
+    ],
+    "stats": {
+      "totalProjects": 3,
+      "pendingProposals": 1,
+      "paidProjects": 1,
+      "revenueReceived": [{ "currency": "USD", "amountCents": 65000 }]
+    }
+  }
+}
+```
+
+Definisi `stats` (dihitung dari **semua** proposal user, bukan hanya `items` yang dikembalikan):
+
+| Field | Kartu dashboard | Definisi |
+|---|---|---|
+| `totalProjects` | Total projects | Jumlah semua proposal |
+| `pendingProposals` | Pending proposals | Proposal berstatus `sent` (menunggu respons klien) |
+| `paidProjects` | Paid projects | Proposal dengan pembayaran PayPal `COMPLETED` yang sudah diverifikasi server |
+| `revenueReceived` | Revenue received | Jumlah capture PayPal terverifikasi, **satu entri per mata uang**; nominal beda mata uang tidak pernah dijumlahkan. Array kosong jika belum ada pembayaran |
+
+---
+
+## Keputusan yang disepakati ([issue #2](https://github.com/ihwankrn/niagora-ai/issues/2))
+
+1. Nama field kategori layanan adalah `serviceType`, dengan nilai lowercase sesuai opsi form.
+2. Semua nominal uang memakai integer cents. Frontend mengonversi input dan memformat tampilan, server menghitung ulang semua nilai finansial, dan mata uang divalidasi sesuai dukungan PayPal.
+3. Nama field pertanyaan adalah `clarificationQuestions`, mengikuti `src/types/analysis.ts`.
+4. Total jam bernama `totalEstimatedHours` dan dihitung server.
+5. Deliverable final selalu memiliki `id` UUID dari server, `title`, `description`, dan `estimatedHours`. Pekerjaan yang belum bisa diestimasi secara wajar ditanyakan lewat `clarificationQuestions`.
+6. `GET /api/proposals` masuk MVP: daftar proposal dan statistik dashboard, revenue dipisah per mata uang dan hanya dari pembayaran terverifikasi, data dibatasi milik user yang login.

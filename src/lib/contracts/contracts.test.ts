@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { analyzeBriefRequestSchema, briefAnalysisSchema } from "./briefs";
 import { hoursSchema } from "./common";
-import { createProposalRequestSchema } from "./proposals";
+import { createProposalRequestSchema, dashboardStatsSchema, listProposalsQuerySchema } from "./proposals";
 import { calculateQuoteRequestSchema } from "./quotes";
 
 const validQuote = {
@@ -39,14 +39,55 @@ describe("analyzeBriefRequestSchema", () => {
 });
 
 describe("briefAnalysisSchema", () => {
+  const deliverable = {
+    id: "3f0e5b8a-6c1d-4e2f-9a7b-1c2d3e4f5a6b",
+    title: "Home page",
+    description: "Hero and services",
+    estimatedHours: 4,
+  };
+
   it("strips price-like fields the model might add", () => {
     const result = briefAnalysisSchema.parse({
       summary: "Company profile site",
-      deliverables: [{ title: "Home page", description: "Hero and services", estimatedHours: 4, priceCents: 99_999 }],
-      clarifyingQuestions: [],
+      deliverables: [{ ...deliverable, priceCents: 99_999 }],
+      clarificationQuestions: [],
       assumptions: [],
     });
     expect(result.deliverables[0]).not.toHaveProperty("priceCents");
+  });
+
+  it("requires a server id and an hour estimate on every deliverable", () => {
+    const withoutId = { title: deliverable.title, description: deliverable.description, estimatedHours: 4 };
+    const withoutHours = { id: deliverable.id, title: deliverable.title, description: deliverable.description };
+    for (const item of [withoutId, withoutHours, { ...deliverable, id: "1" }]) {
+      const result = briefAnalysisSchema.safeParse({
+        summary: "Site",
+        deliverables: [item],
+        clarificationQuestions: [],
+        assumptions: [],
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("allows no deliverables when the brief needs clarification first", () => {
+    const result = briefAnalysisSchema.safeParse({
+      summary: "Scope is unclear",
+      deliverables: [],
+      clarificationQuestions: ["How many pages does the site need?"],
+      assumptions: [],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an analysis with neither deliverables nor questions", () => {
+    const result = briefAnalysisSchema.safeParse({
+      summary: "Empty",
+      deliverables: [],
+      clarificationQuestions: [],
+      assumptions: [],
+    });
+    expect(result.success).toBe(false);
   });
 });
 
@@ -99,5 +140,42 @@ describe("createProposalRequestSchema", () => {
     expect(createProposalRequestSchema.safeParse({ ...base, clientEmail: "nope" }).success).toBe(false);
     expect(createProposalRequestSchema.safeParse({ ...base, briefId: "123" }).success).toBe(false);
     expect(createProposalRequestSchema.safeParse({ ...base, status: "paid" }).success).toBe(false);
+  });
+});
+
+describe("listProposalsQuerySchema", () => {
+  it("defaults and coerces the limit from the query string", () => {
+    expect(listProposalsQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(listProposalsQuerySchema.parse({ limit: "5" })).toEqual({ limit: 5 });
+  });
+
+  it.each(["0", "101", "abc", "2.5"])("rejects limit=%s", (limit) => {
+    expect(listProposalsQuerySchema.safeParse({ limit }).success).toBe(false);
+  });
+
+  it("rejects unknown query parameters such as userId", () => {
+    expect(listProposalsQuerySchema.safeParse({ userId: "someone-else" }).success).toBe(false);
+  });
+});
+
+describe("dashboardStatsSchema", () => {
+  it("keeps revenue separated per currency", () => {
+    const stats = dashboardStatsSchema.parse({
+      totalProjects: 3,
+      pendingProposals: 1,
+      paidProjects: 2,
+      revenueReceived: [
+        { currency: "USD", amountCents: 65_000 },
+        { currency: "EUR", amountCents: 12_000 },
+      ],
+    });
+    expect(stats.revenueReceived).toHaveLength(2);
+  });
+
+  it("rejects a single unlabeled revenue number", () => {
+    expect(
+      dashboardStatsSchema.safeParse({ totalProjects: 1, pendingProposals: 0, paidProjects: 1, revenueReceived: 65_000 })
+        .success,
+    ).toBe(false);
   });
 });
