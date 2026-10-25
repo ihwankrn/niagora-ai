@@ -79,6 +79,22 @@ describe("calculateQuote", () => {
     expect(quote([{ title: "x", estimatedHours: 100 }], MAX_QUOTE_TOTAL_CENTS / 100).totalCents).toBe(MAX_QUOTE_TOTAL_CENTS);
   });
 
+  it("rejects many items that are each under the cap but sum above it", () => {
+    const items = Array.from({ length: 50 }, (_, i) => ({ title: `Item ${i}`, estimatedHours: 1_000 }));
+    // 50 x 1000 h x 2,000.00/h = 100,000,000.00 > 1,000,000.00
+    expect(() => quote(items, 200_000)).toThrow(QuoteLimitError);
+    // 50 x 1000 h x 20.00/h = 1,000,000.00 is exactly the cap
+    expect(quote(items, 2_000).totalCents).toBe(MAX_QUOTE_TOTAL_CENTS);
+  });
+
+  it("keeps the largest possible intermediate values exact (no overflow)", () => {
+    // Largest single product: 100,000 hundredths x 10,000,000 cents = 1e12, far below 2^53.
+    expect(Number.isSafeInteger(MAX_ITEM_HOURS * 100 * MAX_HOURLY_RATE_CENTS)).toBe(true);
+    expect(lineAmountCents(MAX_ITEM_HOURS, MAX_HOURLY_RATE_CENTS)).toBe(10_000_000_000);
+    // The cap also fits the INTEGER (int32) money columns.
+    expect(MAX_QUOTE_TOTAL_CENTS).toBeLessThan(2 ** 31 - 1);
+  });
+
   it("matches the worked example in docs/api.md", () => {
     const blocks = [...readFileSync("docs/api.md", "utf8").matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
     const section = (title: string) => {

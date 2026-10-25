@@ -17,7 +17,7 @@ import { prisma } from "@/lib/db";
 import { calculateQuoteOrThrow } from "@/lib/quotes/service";
 import type { Prisma, ProposalStatus as DbProposalStatus } from "@/generated/prisma/client";
 
-const STATUS_FROM_DB: Record<DbProposalStatus, ProposalStatus> = {
+export const STATUS_FROM_DB: Record<DbProposalStatus, ProposalStatus> = {
   DRAFT: "draft",
   SENT: "sent",
   APPROVED: "approved",
@@ -30,16 +30,16 @@ const STATUS_FROM_DB: Record<DbProposalStatus, ProposalStatus> = {
 // count as paid or as revenue.
 const VERIFIED_PAYMENT: Prisma.PaymentWhereInput = { status: "COMPLETED", verifiedAt: { not: null } };
 
-const proposalWithItems = {
+export const proposalWithItems = {
   include: { items: { orderBy: { position: "asc" } } },
 } satisfies Prisma.ProposalDefaultArgs;
-type ProposalWithItems = Prisma.ProposalGetPayload<typeof proposalWithItems>;
+export type ProposalWithItems = Prisma.ProposalGetPayload<typeof proposalWithItems>;
 
-function toCurrency(value: string): Currency {
+export function toCurrency(value: string): Currency {
   return currencySchema.parse(value.trim());
 }
 
-function toProposal(record: ProposalWithItems): Proposal {
+export function toProposal(record: ProposalWithItems): Proposal {
   const items = record.items.map((item) => ({
     position: item.position,
     title: item.title,

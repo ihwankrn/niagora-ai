@@ -12,7 +12,9 @@ export const API_ERROR_CODES = [
   "PAYLOAD_TOO_LARGE", // 413
   "RATE_LIMITED", // 429
   "AI_UNAVAILABLE", // 502: the LLM failed or returned invalid output
-  "PAYMENT_PROVIDER_ERROR", // 502: PayPal API failed
+  "PAYMENT_NOT_APPROVED", // 409: the payer has not approved the PayPal order yet
+  "PAYMENT_DECLINED", // 422: PayPal declined the funding source; restart checkout
+  "PAYMENT_PROVIDER_ERROR", // 502: PayPal API failed or the payment could not be verified
   "INTERNAL_ERROR", // 500
 ] as const;
 
