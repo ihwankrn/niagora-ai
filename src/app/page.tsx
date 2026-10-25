@@ -5,6 +5,7 @@ import { useState } from "react";
 import StatCard from "@/components/StatCard";
 import WorkflowStep from "@/components/WorkflowStep";
 import Sidebar from "@/components/Sidebar";
+import Spinner from "@/components/Spinner";
 
 const services = [
   { value: "web_development", label: "Web Development" },
@@ -16,18 +17,59 @@ export default function Home() {
   const [brief, setBrief] = useState("");
   const [service, setService] = useState("web_development");
   const [result, setResult] = useState("");
+  const [briefError, setBriefError] = useState<string | null>(null);
+  const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  function handleAnalyze(event: React.FormEvent<HTMLFormElement>) {
+  function validateBrief(value: string): string | null {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return "Brief tidak boleh kosong. Harap jelaskan kebutuhan proyek Anda.";
+    }
+    if (trimmed.length < 20) {
+      return `Brief terlalu singkat (${trimmed.length}/20 karakter). Tambahkan detail kebutuhan klien, minimal 20 karakter.`;
+    }
+    return null;
+  }
+
+  function handleBriefChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
+    const newValue = event.target.value;
+    setBrief(newValue);
+    if (result) setResult("");
+
+    // Jika pengguna sudah mencoba submit, perbarui atau bersihkan pesan error secara dinamis
+    if (hasAttemptedSubmit) {
+      setBriefError(validateBrief(newValue));
+    }
+  }
+
+  async function handleAnalyze(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (brief.trim().length < 20) {
-      setResult("Brief terlalu singkat. Tambahkan detail kebutuhan klien, minimal 20 karakter.");
+    if (isAnalyzing) return;
+
+    setHasAttemptedSubmit(true);
+    const errorMsg = validateBrief(brief);
+
+    if (errorMsg) {
+      setBriefError(errorMsg);
       return;
     }
 
-    setResult(
-      "Brief berhasil disiapkan! Tahap berikutnya adalah menghubungkan form ini ke API analisis AI."
-    );
+    setBriefError(null);
+    setIsAnalyzing(true);
+
+    try {
+      // Integrasi API analisis AI masih menunggu ketersediaan endpoint dari tim Backend.
+      // Blok try-finally memastikan loading state selalu berakhir dengan aman ketika request nyata ditambahkan.
+      setResult(
+        "Brief berhasil divalidasi! Saat ini integrasi API AI masih menunggu ketersediaan endpoint dari tim Backend."
+      );
+    } catch {
+      setResult("Terjadi kesalahan saat memproses brief. Silakan coba lagi.");
+    } finally {
+      setIsAnalyzing(false);
+    }
   }
 
   return (
@@ -132,31 +174,70 @@ export default function Home() {
                       >
                         Client brief
                       </label>
-                      <span className="text-xs text-slate-400">
-                        {brief.length} characters
+                      <span
+                        className={`text-xs ${
+                          hasAttemptedSubmit && briefError
+                            ? "font-medium text-red-600"
+                            : "text-slate-400"
+                        }`}
+                      >
+                        {brief.trim().length} / 20 min characters
                       </span>
                     </div>
                     <textarea
                       id="brief"
+                      name="brief"
                       value={brief}
-                      onChange={(event) => {
-                        setBrief(event.target.value);
-                        setResult("");
-                      }}
+                      onChange={handleBriefChange}
                       placeholder="Example: I need an online store with a product catalog, shopping cart, checkout, and an admin dashboard to manage orders..."
                       rows={7}
-                      className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                      aria-invalid={Boolean(hasAttemptedSubmit && briefError)}
+                      aria-describedby={
+                        hasAttemptedSubmit && briefError
+                          ? "brief-error"
+                          : "brief-hint"
+                      }
+                      className={`w-full resize-y rounded-xl border px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-slate-400 focus:ring-2 ${
+                        hasAttemptedSubmit && briefError
+                          ? "border-red-500 bg-red-50/20 focus:border-red-500 focus:ring-red-100"
+                          : "border-slate-200 focus:border-indigo-500 focus:ring-indigo-100"
+                      }`}
                     />
-                    <p className="mt-2 text-xs text-slate-400">
-                      Include the client’s goals, requested features, and any known requirements.
-                    </p>
+                    {hasAttemptedSubmit && briefError ? (
+                      <p
+                        id="brief-error"
+                        role="alert"
+                        className="mt-2 text-xs font-medium text-red-600"
+                      >
+                        {briefError}
+                      </p>
+                    ) : (
+                      <p id="brief-hint" className="mt-2 text-xs text-slate-400">
+                        Include the client’s goals, requested features, and any known requirements (minimal 20 karakter).
+                      </p>
+                    )}
                   </div>
 
                   <button
                     type="submit"
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+                    disabled={isAnalyzing}
+                    className={`flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3.5 text-sm font-semibold text-white transition ${
+                      isAnalyzing
+                        ? "cursor-not-allowed bg-indigo-400"
+                        : "bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800"
+                    }`}
                   >
-                    ✳ Analyze brief
+                    {isAnalyzing ? (
+                      <>
+                        <Spinner size="sm" color="white" />
+                        <span>Analyzing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span aria-hidden="true">✳</span>
+                        <span>Analyze brief</span>
+                      </>
+                    )}
                   </button>
 
                   {result && (
