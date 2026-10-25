@@ -1,0 +1,157 @@
+// Niagora AI database schema (Supabase Postgres, Prisma ORM 7).
+//
+// Conventions:
+// - Money is stored as integer minor units (cents) to keep quote math exact.
+// - Totals are always computed on the server; never trust client totals.
+// - users.id equals the Supabase Auth user id (auth.users.id). There is no
+//   cross-schema foreign key; the server verifies the session and upserts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ServiceType {
+  WEB_DEVELOPMENT
+  GRAPHIC_DESIGN
+  CONTENT_WRITING
+}
+
+enum BriefStatus {
+  DRAFT
+  ANALYZED
+  FAILED
+}
+
+enum ProposalStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+enum PaymentProvider {
+  PAYPAL
+}
+
+enum PaymentStatus {
+  CREATED
+  APPROVED
+  COMPLETED
+  FAILED
+  VOIDED
+}
+
+model User {
+  id                     String   @id @db.Uuid
+  email                  String   @unique
+  displayName            String?  @map("display_name")
+  defaultHourlyRateCents Int?     @map("default_hourly_rate_cents")
+  defaultCurrency        String   @default("USD") @map("default_currency") @db.Char(3)
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  briefs    Brief[]
+  proposals Proposal[]
+
+  @@map("users")
+}
+
+model Brief {
+  id          String      @id @default(uuid()) @db.Uuid
+  userId      String      @map("user_id") @db.Uuid
+  serviceType ServiceType @map("service_type")
+  rawText     String      @map("raw_text")
+  status      BriefStatus @default(DRAFT)
+  // Server-validated AI output: deliverables, questions, assumptions, hours.
+  analysis    Json?
+  aiModel     String?     @map("ai_model")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  proposals Proposal[]
+
+  @@index([userId, createdAt])
+  @@map("briefs")
+}
+
+model Proposal {
+  id              String         @id @default(uuid()) @db.Uuid
+  userId          String         @map("user_id") @db.Uuid
+  briefId         String?        @map("brief_id") @db.Uuid
+  title           String
+  summary         String?
+  clientName      String?        @map("client_name")
+  clientEmail     String?        @map("client_email")
+  currency        String         @default("USD") @db.Char(3)
+  hourlyRateCents Int            @map("hourly_rate_cents")
+  subtotalCents   Int            @map("subtotal_cents")
+  totalCents      Int            @map("total_cents")
+  status          ProposalStatus @default(DRAFT)
+  // Unguessable token for the client-facing approval/payment link.
+  shareToken      String         @unique @map("share_token")
+  approvedAt      DateTime?      @map("approved_at") @db.Timestamptz(3)
+  paidAt          DateTime?      @map("paid_at") @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brief    Brief?         @relation(fields: [briefId], references: [id], onDelete: SetNull)
+  items    ProposalItem[]
+  payments Payment[]
+
+  @@index([userId, createdAt])
+  @@index([briefId])
+  @@map("proposals")
+}
+
+model ProposalItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  proposalId      String   @map("proposal_id") @db.Uuid
+  position        Int
+  title           String
+  description     String?
+  estimatedHours  Decimal  @map("estimated_hours") @db.Decimal(7, 2)
+  hourlyRateCents Int      @map("hourly_rate_cents")
+  amountCents     Int      @map("amount_cents")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  @@unique([proposalId, position])
+  @@map("proposal_items")
+}
+
+model Payment {
+  id              String          @id @default(uuid()) @db.Uuid
+  proposalId      String          @map("proposal_id") @db.Uuid
+  provider        PaymentProvider @default(PAYPAL)
+  status          PaymentStatus   @default(CREATED)
+  // Expected amount, copied from the proposal at order creation time.
+  amountCents     Int             @map("amount_cents")
+  currency        String          @db.Char(3)
+  paypalOrderId   String          @unique @map("paypal_order_id")
+  paypalCaptureId String?         @unique @map("paypal_capture_id")
+  // Sent as PayPal-Request-Id so retried create/capture calls are idempotent.
+  requestId       String          @unique @map("request_id")
+  payerId         String?         @map("payer_id")
+  payerEmail      String?         @map("payer_email")
+  // Verified PayPal API response kept for audit.
+  providerPayload Json?           @map("provider_payload")
+  verifiedAt      DateTime?       @map("verified_at") @db.Timestamptz(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+
+  @@index([proposalId])
+  @@map("payments")
+}
