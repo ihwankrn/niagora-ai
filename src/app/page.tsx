@@ -2,6 +2,9 @@
 "use client";
 
 import { useState } from "react";
+import StatCard from "@/components/StatCard";
+import WorkflowStep from "@/components/WorkflowStep";
+import Sidebar from "@/components/Sidebar";
 
 const services = [
   { value: "web_development", label: "Web Development" },
@@ -30,55 +33,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f6f8fc] text-slate-900">
       <div className="flex min-h-screen">
-        <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white p-6 md:flex md:flex-col">
-          <a href="/" className="mb-10 flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-lg font-bold text-white">
-              N
-            </div>
-            <div>
-              <p className="text-lg font-bold tracking-tight">Niagora AI</p>
-              <p className="text-xs text-slate-500">Freelance workspace</p>
-            </div>
-          </a>
-
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Workspace
-          </p>
-
-          <nav className="space-y-2">
-            <a
-              href="#dashboard"
-              className="flex items-center gap-3 rounded-xl bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-700"
-            >
-              <span>▦</span> Dashboard
-            </a>
-            <a
-              href="#new-proposal"
-              className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-600 transition hover:bg-slate-50"
-            >
-              <span>＋</span> New proposal
-            </a>
-            <a
-              href="#projects"
-              className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-600 transition hover:bg-slate-50"
-            >
-              <span>▤</span> Projects
-            </a>
-            <a
-              href="#payments"
-              className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-600 transition hover:bg-slate-50"
-            >
-              <span>↗</span> Payments
-            </a>
-          </nav>
-
-          <div className="mt-auto rounded-2xl bg-slate-50 p-4">
-            <p className="text-sm font-semibold">From brief to payment</p>
-            <p className="mt-2 text-xs leading-5 text-slate-500">
-              Organize client requests, prepare proposals, and track payments in one workspace.
-            </p>
-          </div>
-        </aside>
+        <Sidebar activePage="dashboard" />
 
         <section id="dashboard" className="min-w-0 flex-1">
           <header className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4 sm:px-8">
@@ -273,49 +228,3 @@ export default function Home() {
   );
 }
 
-function StatCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className="mt-3 text-3xl font-bold tracking-tight">{value}</p>
-      <p className="mt-2 text-xs text-slate-400">{detail}</p>
-    </div>
-  );
-}
-
-function WorkflowStep({
-  number,
-  title,
-  detail,
-  active = false,
-}: {
-  number: string;
-  title: string;
-  detail: string;
-  active?: boolean;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <div
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${active
-            ? "bg-indigo-500 text-white"
-            : "bg-white/10 text-slate-300"
-          }`}
-      >
-        {number}
-      </div>
-      <div className="pt-0.5">
-        <p className="text-sm font-semibold">{title}</p>
-        <p className="mt-1 text-xs text-slate-400">{detail}</p>
-      </div>
-    </div>
-  );
-}
