@@ -334,6 +334,7 @@ Aturan keamanan:
 - **Nominal tidak pernah dari browser.** `paypal/orders` tidak menerima body; nominal & mata uang diambil dari proposal tersimpan.
 - **Redirect/`onApprove` bukan bukti bayar.** Setelah capture, server mengambil ulang order dari PayPal dan mencocokkan order id, `reference_id` (= proposal), `custom_id` (= payment), mata uang, dan nominal order maupun capture. Hanya capture `COMPLETED` yang lolos verifikasi yang menandai proposal `paid`.
 - **Tidak ada capture ganda.** Capture memakai `PayPal-Request-Id` yang tetap per pembayaran; capture ulang untuk pembayaran yang sudah selesai langsung mengembalikan hasil tersimpan tanpa memanggil PayPal. Database hanya mengizinkan satu order terbuka dan satu pembayaran selesai per proposal.
+- **Rekonsiliasi setelah error jaringan.** Server selalu membaca order dari PayPal sebelum capture. Jika PayPal sudah meng-capture order (misalnya respons capture sebelumnya hilang), server memverifikasi dan mencatatnya **tanpa mengirim capture lagi**. Jadi setelah `502 PAYMENT_PROVIDER_ERROR`, Frontend aman memanggil endpoint capture lagi dengan `orderId` yang sama. Request capture ke PayPal tidak pernah di-retry otomatis; pembacaan order dan pembuatan order di-retry otomatis untuk error sementara.
 - Token di link klien adalah rahasia (32 byte acak). Token salah format atau tidak dikenal → `404`. Proposal `draft` tidak bisa dilihat klien.
 
 Frontend butuh `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (client id Sandbox, publik) untuk memuat PayPal JS SDK.

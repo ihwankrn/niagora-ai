@@ -213,25 +213,36 @@ export async function capturePaypalOrder(token: string, orderId: string): Promis
     throw new ApiError("CONFLICT", `A ${STATUS_FROM_DB[proposal.status]} proposal cannot be paid`);
   }
 
-  try {
-    // Stable request id: PayPal returns the earlier result instead of capturing twice.
-    await paypal.captureOrder(orderId, `${payment.requestId}-capture`);
-  } catch (error) {
-    const issue = error instanceof PaypalApiError ? error.issue : undefined;
-    if (issue === "ORDER_NOT_APPROVED" || issue === "PAYER_ACTION_REQUIRED") {
-      throw new ApiError("PAYMENT_NOT_APPROVED", "The payment has not been approved in PayPal yet.");
+  const readOrder = async () => {
+    try {
+      return await paypal.getOrder(orderId);
+    } catch (error) {
+      providerError(error);
     }
-    if (issue === "INSTRUMENT_DECLINED") {
-      throw new ApiError("PAYMENT_DECLINED", "The payment method was declined. Please choose another one.");
-    }
-    if (issue !== "ORDER_ALREADY_CAPTURED") providerError(error);
-  }
+  };
 
-  let order: PaypalOrder;
-  try {
-    order = await paypal.getOrder(orderId);
-  } catch (error) {
-    providerError(error);
+  // Read first. If PayPal already captured this order (for example an earlier
+  // attempt lost its response), reconcile from PayPal's record instead of
+  // sending another capture.
+  let order = await readOrder();
+  if (order.status !== "COMPLETED") {
+    try {
+      // Stable request id: PayPal returns the earlier result instead of capturing twice.
+      await paypal.captureOrder(orderId, `${payment.requestId}-capture`);
+    } catch (error) {
+      const issue = error instanceof PaypalApiError ? error.issue : undefined;
+      if (issue === "ORDER_NOT_APPROVED" || issue === "PAYER_ACTION_REQUIRED") {
+        throw new ApiError("PAYMENT_NOT_APPROVED", "The payment has not been approved in PayPal yet.");
+      }
+      if (issue === "INSTRUMENT_DECLINED") {
+        throw new ApiError("PAYMENT_DECLINED", "The payment method was declined. Please choose another one.");
+      }
+      if (error instanceof PaypalApiError && issue !== "ORDER_ALREADY_CAPTURED") providerError(error);
+      // Network error or timeout: the capture may or may not have happened.
+      // The re-read below decides; the capture is not sent again.
+      if (!(error instanceof PaypalApiError)) console.error("PayPal capture response lost, re-reading order", { orderId });
+    }
+    order = await readOrder();
   }
 
   const result = verifyPaypalOrder(order, {
@@ -251,6 +262,10 @@ export async function capturePaypalOrder(token: string, orderId: string): Promis
   if (result.kind === "declined") {
     await prisma.payment.update({ where: { id: payment.id }, data: { status: "FAILED", providerPayload: payload } });
     throw new ApiError("PAYMENT_DECLINED", "The payment was declined. Please choose another payment method.");
+  }
+  if (result.kind === "pending" && !result.capture) {
+    // Not captured (yet): nothing to record. Calling capture again is safe.
+    throw new ApiError("PAYMENT_PROVIDER_ERROR", "The payment could not be completed. Please try again.");
   }
   if (result.kind === "pending") {
     const updated = await prisma.payment.update({

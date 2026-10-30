@@ -103,3 +103,72 @@ describe("PayPal requests", () => {
     await expect(getOrder("A", fetchImpl)).rejects.toMatchObject({ status: 401 });
   });
 });
+
+describe("retries for transient errors", () => {
+  const networkError = () => new TypeError("fetch failed");
+
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
+  async function settle<T>(promise: Promise<T>) {
+    const result = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+    await vi.runAllTimersAsync();
+    return result;
+  }
+
+  it("retries a GET after a network error and a 503", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(token())
+      .mockRejectedValueOnce(networkError())
+      .mockResolvedValueOnce(json(503, { name: "SERVICE_UNAVAILABLE" }))
+      .mockResolvedValueOnce(json(200, { id: "A", status: "COMPLETED" }));
+
+    const result = await settle(getOrder("A", fetchImpl));
+
+    expect(result).toEqual({ value: { id: "A", status: "COMPLETED" } });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives up after the last retry", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockRejectedValue(networkError());
+    const result = await settle(getOrder("A", fetchImpl));
+    expect(result).toEqual({ error: expect.any(TypeError) });
+    expect(fetchImpl).toHaveBeenCalledTimes(4); // token + 3 attempts
+  });
+
+  it("retries order creation with the same PayPal-Request-Id", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(token())
+      .mockRejectedValueOnce(networkError())
+      .mockResolvedValueOnce(json(201, { id: "ORDER1", status: "CREATED" }));
+
+    await settle(
+      createOrder({ requestId: "req-1", proposalId: "p", paymentId: "pay", description: "d", amount: { currency_code: "USD", value: "1.00" } }, fetchImpl),
+    );
+
+    const ids = fetchImpl.mock.calls.slice(1).map(([, init]) => (init!.headers as Record<string, string>)["paypal-request-id"]);
+    expect(ids).toEqual(["req-1", "req-1"]);
+  });
+
+  it("never retries a capture, even after a network error", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockRejectedValueOnce(networkError());
+    const result = await settle(captureOrder("ORDER1", "req-1-capture", fetchImpl));
+    expect(result).toEqual({ error: expect.any(TypeError) });
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/capture"))).toHaveLength(1);
+  });
+
+  it("does not retry 4xx errors", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockResolvedValueOnce(json(404, { name: "RESOURCE_NOT_FOUND" }));
+    const result = await settle(getOrder("MISSING", fetchImpl));
+    expect(result).toEqual({ error: expect.objectContaining({ status: 404 }) });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the token request after a network error", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(networkError())
+      .mockResolvedValueOnce(token())
+      .mockResolvedValueOnce(json(200, { id: "A", status: "APPROVED" }));
+    expect(await settle(getOrder("A", fetchImpl))).toEqual({ value: { id: "A", status: "APPROVED" } });
+  });
+});

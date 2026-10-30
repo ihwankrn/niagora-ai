@@ -201,18 +201,22 @@ describe("createPaypalOrder", () => {
 });
 
 describe("capturePaypalOrder", () => {
+  const approvedOrder = () => paypalOrder("APPROVED", null);
+  const networkError = () => new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+
   beforeEach(() => db.proposal.findUnique.mockResolvedValue(proposal("APPROVED")));
 
-  it("captures, re-reads and verifies the order, then marks the payment and proposal paid together", async () => {
+  it("reads the order, captures once, re-reads and verifies, then marks the payment and proposal paid together", async () => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValueOnce(approvedOrder()).mockResolvedValueOnce(paypalOrder());
     paypal.captureOrder.mockResolvedValue({ id: ORDER_ID, status: "COMPLETED" });
-    paypal.getOrder.mockResolvedValue(paypalOrder());
 
     const result = await capturePaypalOrder(TOKEN, ORDER_ID);
 
     expect(db.payment.findFirst).toHaveBeenCalledWith({ where: { paypalOrderId: ORDER_ID, proposalId: PROPOSAL_ID } });
+    expect(paypal.captureOrder).toHaveBeenCalledTimes(1);
     expect(paypal.captureOrder).toHaveBeenCalledWith(ORDER_ID, "req-1-capture");
-    expect(paypal.getOrder).toHaveBeenCalledWith(ORDER_ID);
+    expect(paypal.getOrder).toHaveBeenCalledTimes(2);
     expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.payment.update).toHaveBeenCalledWith({
       where: { id: PAYMENT_ID },
@@ -225,6 +229,41 @@ describe("capturePaypalOrder", () => {
     expect(result).toMatchObject({ paymentStatus: "completed", proposalStatus: "paid", captureId: "CAP1", amountCents: 65_000 });
   });
 
+  it("reconciles an order PayPal already captured without sending another capture", async () => {
+    db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValue(paypalOrder());
+
+    const result = await capturePaypalOrder(TOKEN, ORDER_ID);
+
+    expect(paypal.captureOrder).not.toHaveBeenCalled();
+    expect(paypal.getOrder).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ paymentStatus: "completed", proposalStatus: "paid", captureId: "CAP1" });
+  });
+
+  it("re-reads instead of re-capturing when the capture response is lost, and records a capture that happened", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValueOnce(approvedOrder()).mockResolvedValueOnce(paypalOrder());
+    paypal.captureOrder.mockRejectedValue(networkError());
+
+    const result = await capturePaypalOrder(TOKEN, ORDER_ID);
+
+    expect(paypal.captureOrder).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ paymentStatus: "completed", proposalStatus: "paid" });
+  });
+
+  it("records nothing when the capture response is lost and PayPal shows no capture", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValue(approvedOrder());
+    paypal.captureOrder.mockRejectedValue(networkError());
+
+    await expect(capturePaypalOrder(TOKEN, ORDER_ID)).rejects.toMatchObject({ code: "PAYMENT_PROVIDER_ERROR" });
+    expect(paypal.captureOrder).toHaveBeenCalledTimes(1);
+    expect(db.payment.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it("returns the stored result for a repeated capture without calling PayPal", async () => {
     db.proposal.findUnique.mockResolvedValue(proposal("PAID", { paidAt: now }));
     db.payment.findFirst.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1" }));
@@ -232,6 +271,7 @@ describe("capturePaypalOrder", () => {
     const result = await capturePaypalOrder(TOKEN, ORDER_ID);
 
     expect(result).toMatchObject({ paymentStatus: "completed", proposalStatus: "paid", captureId: "CAP1" });
+    expect(paypal.getOrder).not.toHaveBeenCalled();
     expect(paypal.captureOrder).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
@@ -239,6 +279,7 @@ describe("capturePaypalOrder", () => {
   it("returns 404 for an order that does not belong to this proposal", async () => {
     db.payment.findFirst.mockResolvedValue(null);
     await expect(capturePaypalOrder(TOKEN, "SOMEONEELSE")).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(paypal.getOrder).not.toHaveBeenCalled();
     expect(paypal.captureOrder).not.toHaveBeenCalled();
   });
 
@@ -256,16 +297,27 @@ describe("capturePaypalOrder", () => {
     ["INSTRUMENT_DECLINED", "PAYMENT_DECLINED"],
   ])("maps PayPal %s to %s without marking anything paid", async (issue, code) => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValue(paypalOrder("CREATED", null));
     paypal.captureOrder.mockRejectedValue(paypalError(issue));
 
     await expect(capturePaypalOrder(TOKEN, ORDER_ID)).rejects.toMatchObject({ code });
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
+  it("maps other PayPal API errors to PAYMENT_PROVIDER_ERROR", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValue(approvedOrder());
+    paypal.captureOrder.mockRejectedValue(new PaypalApiError(500, { name: "INTERNAL_SERVER_ERROR" }));
+
+    await expect(capturePaypalOrder(TOKEN, ORDER_ID)).rejects.toMatchObject({ code: "PAYMENT_PROVIDER_ERROR" });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it("continues to verification when PayPal says the order was already captured", async () => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValueOnce(approvedOrder()).mockResolvedValueOnce(paypalOrder());
     paypal.captureOrder.mockRejectedValue(paypalError("ORDER_ALREADY_CAPTURED"));
-    paypal.getOrder.mockResolvedValue(paypalOrder());
 
     expect((await capturePaypalOrder(TOKEN, ORDER_ID)).paymentStatus).toBe("completed");
   });
@@ -273,7 +325,6 @@ describe("capturePaypalOrder", () => {
   it("flags an amount mismatch as FAILED and never marks the proposal paid", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
-    paypal.captureOrder.mockResolvedValue({ id: ORDER_ID, status: "COMPLETED" });
     paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "COMPLETED", "1.00"));
 
     await expect(capturePaypalOrder(TOKEN, ORDER_ID)).rejects.toMatchObject({ code: "PAYMENT_PROVIDER_ERROR" });
@@ -284,8 +335,8 @@ describe("capturePaypalOrder", () => {
 
   it("keeps a pending capture open instead of marking it paid", async () => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValueOnce(approvedOrder()).mockResolvedValueOnce(paypalOrder("APPROVED", "PENDING"));
     paypal.captureOrder.mockResolvedValue({ id: ORDER_ID, status: "COMPLETED" });
-    paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "PENDING"));
 
     const result = await capturePaypalOrder(TOKEN, ORDER_ID);
 
@@ -296,8 +347,8 @@ describe("capturePaypalOrder", () => {
 
   it("marks a declined capture as FAILED", async () => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
+    paypal.getOrder.mockResolvedValueOnce(approvedOrder()).mockResolvedValueOnce(paypalOrder("APPROVED", "DECLINED"));
     paypal.captureOrder.mockResolvedValue({ id: ORDER_ID, status: "COMPLETED" });
-    paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "DECLINED"));
 
     await expect(capturePaypalOrder(TOKEN, ORDER_ID)).rejects.toMatchObject({ code: "PAYMENT_DECLINED" });
     expect(db.payment.update).toHaveBeenCalledWith({ where: { id: PAYMENT_ID }, data: expect.objectContaining({ status: "FAILED" }) });
@@ -305,7 +356,6 @@ describe("capturePaypalOrder", () => {
 
   it("returns the result of a concurrent capture that completed first", async () => {
     db.payment.findFirst.mockResolvedValue(payment("CREATED"));
-    paypal.captureOrder.mockResolvedValue({ id: ORDER_ID, status: "COMPLETED" });
     paypal.getOrder.mockResolvedValue(paypalOrder());
     db.$transaction.mockRejectedValue(uniqueViolation());
     db.payment.findUnique.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1" }));

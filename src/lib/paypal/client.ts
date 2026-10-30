@@ -71,19 +71,24 @@ async function getAccessToken(fetchImpl: typeof fetch) {
     return { token: cachedToken.value, baseUrl: config.baseUrl };
   }
 
-  const response = await fetchImpl(`${config.baseUrl}/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body: "grant_type=client_credentials",
-    cache: "no-store",
+  // Requesting a token has no side effects, so it is always safe to retry.
+  const body = await withRetry(true, async () => {
+    const response = await fetchImpl(`${config.baseUrl}/v1/oauth2/token`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: "grant_type=client_credentials",
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok || typeof json.access_token !== "string") {
+      throw new PaypalApiError(response.status, json);
+    }
+    return json as { access_token: string; expires_in: number };
   });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || typeof body.access_token !== "string") {
-    throw new PaypalApiError(response.status, body);
-  }
 
   // Refresh a minute early.
   cachedToken = { value: body.access_token, expiresAt: Date.now() + (Number(body.expires_in) - 60) * 1000, key };
@@ -94,30 +99,54 @@ export function resetPaypalTokenCache() {
   cachedToken = undefined;
 }
 
+const REQUEST_TIMEOUT_MS = 20_000;
+export const RETRY_DELAYS_MS = [300, 1_000];
+
+// Network failures, timeouts, 429 and 5xx may succeed on a later attempt
+// (developer.paypal.com/api/rest/reference/idempotency/). 4xx errors will not.
+export function isTransientPaypalError(error: unknown) {
+  if (error instanceof PaypalApiError) return error.status === 429 || error.status >= 500;
+  return error instanceof TypeError || (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name));
+}
+
+async function withRetry<T>(retry: boolean, attempt: () => Promise<T>): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!retry || i >= RETRY_DELAYS_MS.length || !isTransientPaypalError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[i]));
+    }
+  }
+}
+
 async function request<T>(
   method: "GET" | "POST",
   path: string,
-  options: { body?: unknown; requestId?: string } = {},
+  options: { body?: unknown; requestId?: string; retry: boolean },
   fetchImpl: typeof fetch = fetch,
 ): Promise<T> {
   const { token, baseUrl } = await getAccessToken(fetchImpl);
-  const response = await fetchImpl(`${baseUrl}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      prefer: "return=representation",
-      ...(options.requestId ? { "paypal-request-id": options.requestId } : {}),
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    cache: "no-store",
-  });
+  return withRetry(options.retry, async () => {
+    const response = await fetchImpl(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        prefer: "return=representation",
+        ...(options.requestId ? { "paypal-request-id": options.requestId } : {}),
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
 
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new PaypalApiError(response.status, body);
-  }
-  return body as T;
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new PaypalApiError(response.status, body);
+    }
+    return body as T;
+  });
 }
 
 export type CreateOrderInput = {
@@ -134,6 +163,8 @@ export function createOrder(input: CreateOrderInput, fetchImpl?: typeof fetch) {
     "/v2/checkout/orders",
     {
       requestId: input.requestId,
+      // Same PayPal-Request-Id on every attempt: a retry returns the same order.
+      retry: true,
       body: {
         intent: "CAPTURE",
         purchase_units: [
@@ -152,12 +183,19 @@ export function createOrder(input: CreateOrderInput, fetchImpl?: typeof fetch) {
   );
 }
 
+// Never retried automatically: after a lost response the caller re-reads the
+// order instead of sending the capture again.
 export function captureOrder(orderId: string, requestId: string, fetchImpl?: typeof fetch) {
-  return request<PaypalOrder>("POST", `/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`, { requestId, body: {} }, fetchImpl);
+  return request<PaypalOrder>(
+    "POST",
+    `/v2/checkout/orders/${encodeURIComponent(orderId)}/capture`,
+    { requestId, body: {}, retry: false },
+    fetchImpl,
+  );
 }
 
 export function getOrder(orderId: string, fetchImpl?: typeof fetch) {
-  return request<PaypalOrder>("GET", `/v2/checkout/orders/${encodeURIComponent(orderId)}`, {}, fetchImpl);
+  return request<PaypalOrder>("GET", `/v2/checkout/orders/${encodeURIComponent(orderId)}`, { retry: true }, fetchImpl);
 }
 
 // PayPal amounts are strings with exactly 2 decimals for the supported currencies.
