@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db";
 import * as paypal from "@/lib/paypal/client";
 import { formatAmount, PaypalApiError, type PaypalOrder } from "@/lib/paypal/client";
 import { proposalWithItems, STATUS_FROM_DB, toCurrency, toProposal } from "@/lib/proposals/service";
+import { proposalShareUrl } from "@/lib/proposals/share-link";
 import { Prisma } from "@/generated/prisma/client";
 
 import { verifyPaypalOrder } from "./verify";
@@ -84,7 +85,7 @@ export async function sendProposal(user: AuthUser, proposalId: string): Promise<
   if (record.status === "CANCELLED" || record.status === "REJECTED") {
     throw new ApiError("CONFLICT", `A ${STATUS_FROM_DB[record.status]} proposal cannot be sent`);
   }
-  return { proposal: toProposal(record), shareUrl: `${appBaseUrl()}/p/${record.shareToken}` };
+  return { proposal: toProposal(record), shareUrl: proposalShareUrl(appBaseUrl(), record.shareToken) };
 }
 
 export async function getPublicProposal(token: string): Promise<PublicProposal> {

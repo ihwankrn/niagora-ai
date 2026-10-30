@@ -11,7 +11,7 @@ export const shareTokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 // POST /api/proposals/:id/send (freelancer, session required)
 export const sendProposalResponseSchema = z.object({
   proposal: proposalSchema,
-  // Link to give the client: APP_BASE_URL/p/<shareToken>
+  // Link to give the client: APP_BASE_URL/proposals/view/<shareToken>
   shareUrl: z.url(),
 });
 export type SendProposalResponse = z.infer<typeof sendProposalResponseSchema>;

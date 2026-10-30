@@ -16,7 +16,7 @@ vi.mock("@/lib/paypal/client", async (importOriginal) => ({
   ...paypal,
 }));
 
-const { approveProposal, capturePaypalOrder, createPaypalOrder, sendProposal } = await import("./service");
+const { approveProposal, capturePaypalOrder, createPaypalOrder, getPublicProposal, sendProposal } = await import("./service");
 
 const TOKEN = "a".repeat(43);
 const PROPOSAL_ID = "33333333-3333-4333-8333-333333333333";
@@ -104,7 +104,7 @@ describe("sendProposal", () => {
 
     expect(db.proposal.findFirst).toHaveBeenCalledWith({ where: { id: PROPOSAL_ID, userId: "u1" }, select: { status: true } });
     expect(db.proposal.updateMany).toHaveBeenCalledWith({ where: { id: PROPOSAL_ID, status: "DRAFT" }, data: { status: "SENT" } });
-    expect(result.shareUrl).toBe(`http://localhost:3000/p/${TOKEN}`);
+    expect(result.shareUrl).toBe(`http://localhost:3000/proposals/view/${TOKEN}`);
     expect(result.proposal.status).toBe("sent");
   });
 
@@ -362,5 +362,47 @@ describe("capturePaypalOrder", () => {
     db.proposal.findUnique.mockResolvedValueOnce(proposal("APPROVED")).mockResolvedValueOnce({ status: "PAID", paidAt: now });
 
     expect(await capturePaypalOrder(TOKEN, ORDER_ID)).toMatchObject({ paymentStatus: "completed", proposalStatus: "paid" });
+  });
+});
+
+describe("getPublicProposal", () => {
+  it("returns exactly the public fields and never internal or payment data", async () => {
+    db.proposal.findUnique.mockResolvedValue(proposal("SENT"));
+
+    const result = await getPublicProposal(TOKEN);
+
+    expect(Object.keys(result).sort()).toEqual(
+      ["approvedAt", "clientName", "currency", "freelancerName", "items", "paidAt", "status", "subtotalCents", "summary", "title", "totalCents", "totalHours"].sort(),
+    );
+    const serialized = JSON.stringify(result);
+    for (const secret of [PROPOSAL_ID, "u1", "client@example.com", TOKEN, PAYMENT_ID, ORDER_ID]) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(result).toMatchObject({ status: "sent", freelancerName: "Freelancer", totalCents: 65_000, currency: "USD" });
+  });
+
+  it("only reads: opening the link never changes the proposal", async () => {
+    db.proposal.findUnique.mockResolvedValue(proposal("SENT"));
+    await getPublicProposal(TOKEN);
+
+    expect(db.proposal.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { shareToken: TOKEN } }));
+    expect(db.proposal.updateMany).not.toHaveBeenCalled();
+    expect(db.payment.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("returns the same 404 for unknown tokens and drafts", async () => {
+    db.proposal.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(proposal("DRAFT"));
+    const unknown = await getPublicProposal(TOKEN).catch((e: unknown) => e);
+    const draft = await getPublicProposal(TOKEN).catch((e: unknown) => e);
+    expect(unknown).toMatchObject({ code: "NOT_FOUND", message: "Proposal not found" });
+    expect(draft).toMatchObject({ code: "NOT_FOUND", message: "Proposal not found" });
+  });
+
+  it("still shows rejected and cancelled proposals with their status", async () => {
+    for (const status of ["REJECTED", "CANCELLED"]) {
+      db.proposal.findUnique.mockResolvedValue(proposal(status));
+      expect((await getPublicProposal(TOKEN)).status).toBe(status.toLowerCase());
+    }
   });
 });

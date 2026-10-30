@@ -319,7 +319,7 @@ Definisi `stats` (dihitung dari **semua** proposal user, bukan hanya `items` yan
 ## Alur persetujuan & pembayaran PayPal (🆕 perlu review Frontend)
 
 ```
-Freelancer (login)                Klien (link /p/<token>, tanpa login)         Server ↔ PayPal
+Freelancer (login)                Klien (link /proposals/view/<token>)      Server ↔ PayPal
 POST /api/proposals/:id/send  →   draft → sent, dapat shareUrl
                                   GET  /api/public/proposals/:token   (lihat)
                                   POST /api/public/proposals/:token/approve    sent → approved
@@ -344,12 +344,18 @@ Frontend butuh `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (client id Sandbox, publik) untuk 
 Tanpa body. `draft` → `sent` (idempoten untuk `sent`/`approved`/`paid`). `404` jika bukan milik user, `409` jika `rejected`/`cancelled`.
 
 ```json
-{ "data": { "proposal": { "id": "…", "status": "sent", "…": "…" }, "shareUrl": "http://localhost:3000/p/<token>" } }
+{ "data": { "proposal": { "id": "…", "status": "sent", "…": "…" }, "shareUrl": "http://localhost:3000/proposals/view/<token>" } }
 ```
 
 ### `GET /api/public/proposals/:token`
 
-Tampilan klien. Tidak memuat id internal, email klien, atau akun freelancer.
+Tampilan klien untuk halaman Frontend `/proposals/view/[shareToken]`. Ini satu-satunya endpoint publik untuk membaca proposal — **bukan** `/api/proposals/view/:token`. Tanpa login; respons `Cache-Control: private, no-store`.
+
+- Hanya membaca: membuka link **tidak** mengubah status proposal (persetujuan lewat `POST .../approve`).
+- Tidak memuat id internal, `userId`, email klien, token, atau data pembayaran (order/capture/payer).
+- `items` adalah baris harga proposal (bukan `deliverables` hasil analisis brief). Semua nominal integer cents.
+- `freelancerName` diambil dari nama profil Supabase freelancer (`full_name`/`name`); bisa `null` — tampilkan teks netral, jangan email.
+- Token salah format, tidak dikenal, atau proposal masih `draft` → `404 NOT_FOUND` dengan pesan yang sama (keberadaan proposal tidak bocor). Status `rejected`/`cancelled` tetap dikembalikan; Frontend menampilkan status tersebut tanpa tombol aksi.
 
 ```json
 {

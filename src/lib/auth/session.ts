@@ -4,11 +4,14 @@ import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import { ApiError } from "@/lib/api/http";
+import { displayNameFromMetadata } from "@/lib/auth/display-name";
 import { prisma } from "@/lib/db";
 
 export type AuthUser = {
   id: string; // Supabase Auth user id (JWT "sub"), equals users.id
   email: string;
+  // Public name shown to clients, from Supabase user_metadata. Never the email.
+  displayName?: string | null;
 };
 
 export async function createSupabaseServerClient() {
@@ -48,14 +51,16 @@ export async function requireUser(): Promise<AuthUser> {
   if (error || !claims?.sub || claims.is_anonymous || !claims.email) {
     throw new ApiError("UNAUTHORIZED", "Sign in to continue");
   }
-  return { id: claims.sub, email: claims.email };
+  return { id: claims.sub, email: claims.email, displayName: displayNameFromMetadata(claims.user_metadata) };
 }
 
 // Keeps a users row for every authenticated Supabase user.
 export async function ensureUserRecord(user: AuthUser) {
+  const displayName = user.displayName ?? null;
   await prisma.user.upsert({
     where: { id: user.id },
-    create: { id: user.id, email: user.email },
-    update: { email: user.email },
+    create: { id: user.id, email: user.email, displayName },
+    // Only overwrite the stored name when the session carries one.
+    update: { email: user.email, ...(displayName ? { displayName } : {}) },
   });
 }
