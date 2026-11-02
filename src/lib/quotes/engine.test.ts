@@ -96,7 +96,7 @@ describe("calculateQuote", () => {
   });
 
   it("matches the worked example in docs/api.md", () => {
-    const blocks = [...readFileSync("docs/api.md", "utf8").matchAll(/```json\n([\s\S]*?)```/g)].map((m) => m[1]);
+    const blocks = [...readFileSync("docs/api.md", "utf8").matchAll(/```json\r?\n([\s\S]*?)```/g)].map((m) => m[1]);
     const section = (title: string) => {
       const md = readFileSync("docs/api.md", "utf8");
       const start = md.indexOf(`## \`${title}\``);
