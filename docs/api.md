@@ -18,7 +18,7 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 | `POST /api/quotes/calculate` | ✅ disepakati | ✅ Route handler ada, unit-tested, 401 diuji live |
 | `POST /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
 | `GET /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
-| `GET /api/proposals/:id` | rencana | — |
+| `GET /api/proposals/:id` | ✅ kontrak `Proposal` yang sama dengan `POST /api/proposals` | Route handler ada, unit-tested; belum diuji runtime |
 | `POST /api/proposals/:id/send` | 🆕 perlu review FE | Unit-tested |
 | `GET /api/public/proposals/:token` | 🆕 perlu review FE | Unit-tested |
 | `POST /api/public/proposals/:token/approve` | 🆕 perlu review FE | Unit-tested |
@@ -266,6 +266,15 @@ Error khusus:
 Item, nominal, dan total disimpan dari hasil quote engine server, lalu dibaca kembali dari database untuk respons. Server juga membuat token acak untuk link klien (dipakai di tahap persetujuan/pembayaran; tidak dikembalikan di respons ini).
 
 ---
+
+## `GET /api/proposals/:id`
+
+Detail lengkap satu proposal untuk freelancer pemiliknya (dipakai `ProposalDetailModal`). Wajib login; respons `Cache-Control: private, no-store`.
+
+- Respons `200`: `{ "data": Proposal }` — bentuk yang sama persis dengan respons `201` `POST /api/proposals` (item, jam, tarif, `subtotalCents`, `totalCents`, `currency`, `status`, tanggal).
+- Tidak memuat `shareToken`, `userId`, atau data pembayaran (order/capture/payer).
+- Hanya membaca: membuka detail tidak mengubah `status` maupun `updatedAt`.
+- `401 UNAUTHORIZED` tanpa sesi. `404 NOT_FOUND` jika id tidak valid, proposal tidak ada, **atau milik user lain** — respons sama persis untuk ketiganya.
 
 ## `GET /api/proposals`
 

@@ -5,12 +5,12 @@ import { Prisma } from "@/generated/prisma/client";
 
 const db = vi.hoisted(() => ({
   brief: { findFirst: vi.fn() },
-  proposal: { create: vi.fn(), count: vi.fn(), findMany: vi.fn() },
-  payment: { groupBy: vi.fn() },
+  proposal: { create: vi.fn(), count: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+  payment: { groupBy: vi.fn(), update: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: db }));
 
-const { createProposal, getDashboardStats, listProposals } = await import("./service");
+const { createProposal, getDashboardStats, getProposalForUser, listProposals } = await import("./service");
 
 const user = { id: "11111111-1111-4111-8111-111111111111", email: "freelancer@example.com" };
 const briefId = "22222222-2222-4222-8222-222222222222";
@@ -146,5 +146,80 @@ describe("listProposals", () => {
     expect(result.items).toEqual([
       { id: "p1", title: "Site", clientName: null, status: "paid", currency: "USD", totalCents: 65_000, createdAt: now.toISOString() },
     ]);
+  });
+});
+
+describe("getProposalForUser", () => {
+  const proposalId = "33333333-3333-4333-8333-333333333333";
+  const storedProposal = () => ({
+    id: proposalId,
+    userId: user.id,
+    briefId,
+    title: "Company profile website",
+    summary: "Five pages",
+    clientName: "Client",
+    clientEmail: "client@example.com",
+    currency: "USD",
+    hourlyRateCents: 5_000,
+    subtotalCents: 65_000,
+    totalCents: 65_000,
+    status: "DRAFT",
+    shareToken: "s".repeat(43),
+    approvedAt: null,
+    paidAt: null,
+    createdAt: now,
+    updatedAt: now,
+    items: [
+      { position: 0, title: "Pages", description: null, estimatedHours: new Prisma.Decimal(10), hourlyRateCents: 5_000, amountCents: 50_000 },
+      { position: 1, title: "Form", description: "Email", estimatedHours: new Prisma.Decimal(2.5), hourlyRateCents: 6_000, amountCents: 15_000 },
+    ],
+  });
+
+  it("loads the proposal only for its owner and returns the full contract", async () => {
+    db.proposal.findFirst.mockResolvedValue(storedProposal());
+
+    const proposal = await getProposalForUser(user, proposalId);
+
+    expect(db.proposal.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: proposalId, userId: user.id } }),
+    );
+    expect(proposalSchema.parse(proposal)).toEqual(proposal);
+    expect(proposal).toMatchObject({ status: "draft", totalHours: 12.5, totalCents: 65_000, subtotalCents: 65_000 });
+    expect(proposal.items.map((item) => item.estimatedHours)).toEqual([10, 2.5]);
+  });
+
+  it("never returns the share token, the owner id or payment data", async () => {
+    db.proposal.findFirst.mockResolvedValue(storedProposal());
+    const proposal = await getProposalForUser(user, proposalId);
+    const serialized = JSON.stringify(proposal);
+    expect(proposal).not.toHaveProperty("shareToken");
+    expect(proposal).not.toHaveProperty("userId");
+    expect(serialized).not.toContain("s".repeat(43));
+    expect(serialized).not.toMatch(/paypal|payer|capture|payments/i);
+  });
+
+  it("returns the same 404 for a missing proposal and for someone else's", async () => {
+    db.proposal.findFirst.mockResolvedValue(null);
+    const other = { id: "99999999-9999-4999-8999-999999999999", email: "other@example.com" };
+
+    const missing = await getProposalForUser(user, proposalId).catch((e: unknown) => e);
+    const foreign = await getProposalForUser(other, proposalId).catch((e: unknown) => e);
+
+    expect(missing).toMatchObject({ code: "NOT_FOUND", message: "Proposal not found" });
+    expect(foreign).toMatchObject({ code: "NOT_FOUND", message: "Proposal not found" });
+    expect(db.proposal.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { id: proposalId, userId: other.id } }),
+    );
+  });
+
+  it("only reads: no status or updatedAt change", async () => {
+    db.proposal.findFirst.mockResolvedValue(storedProposal());
+    const proposal = await getProposalForUser(user, proposalId);
+
+    expect(proposal.updatedAt).toBe(now.toISOString());
+    expect(db.proposal.update).not.toHaveBeenCalled();
+    expect(db.proposal.updateMany).not.toHaveBeenCalled();
+    expect(db.proposal.create).not.toHaveBeenCalled();
+    expect(db.payment.update).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Currency, ProposalStatus, ProposalSummary, Proposal } from "@/types/proposals";
 import { sendProposalResponseSchema, type SendProposalResponse } from "@/lib/contracts/payments";
+import { fetchProposalDetail, ProposalDetailError } from "@/lib/proposals/detail-client";
 import Spinner from "@/components/Spinner";
 
 export type ProposalDetailItem = ProposalSummary;
@@ -20,6 +21,12 @@ interface ApiErrorInfo {
   httpStatus?: number;
 }
 
+// Detail data always comes from GET /api/proposals/:id; nothing is filled in locally.
+export type ProposalDetailState =
+  | { status: "loading" }
+  | { status: "error"; error: ProposalDetailError }
+  | { status: "ready"; proposal: Proposal };
+
 function formatCents(cents: number, currency: Currency): string {
   const formatter = new Intl.NumberFormat(undefined, {
     style: "currency",
@@ -35,6 +42,16 @@ function formatDate(isoString: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function formatHours(hours: number): string {
+  return `${hours} ${hours === 1 ? "hr" : "hrs"}`;
+}
+
+// The backend returns an absolute shareUrl; keep relative values working too.
+function toAbsoluteUrl(url: string): string {
+  if (/^https?:\/\//.test(url)) return url;
+  return `${typeof window !== "undefined" ? window.location.origin : ""}${url}`;
 }
 
 function getStatusBadge(status: ProposalStatus) {
@@ -56,6 +73,137 @@ function getStatusBadge(status: ProposalStatus) {
   }
 }
 
+interface ProposalDetailContentProps {
+  state: ProposalDetailState;
+  onRetry: () => void;
+}
+
+// Loading, error and success views for the proposal detail section.
+export function ProposalDetailContent({ state, onRetry }: ProposalDetailContentProps) {
+  if (state.status === "loading") {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center gap-2 rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 text-xs text-slate-600"
+      >
+        <Spinner size="sm" />
+        <span>Loading proposal details…</span>
+      </div>
+    );
+  }
+
+  if (state.status === "error") {
+    const { error } = state;
+    const canRetry = error.kind !== "not_found" && error.kind !== "unauthorized";
+    return (
+      <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 space-y-2">
+        <div className="flex items-center gap-1.5 font-bold text-rose-900">
+          <span>⚠️</span>
+          <span>Could not load proposal details</span>
+        </div>
+        <p>{error.message}</p>
+        {canRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 transition"
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const { proposal } = state;
+  return (
+    <div className="space-y-4" data-testid="proposal-detail">
+      {/* Pricing Summary Grid */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 text-xs">
+        <div>
+          <span className="text-slate-400 font-medium">Client</span>
+          <p className="mt-0.5 font-bold text-slate-800 truncate">{proposal.clientName || "Not specified"}</p>
+          {proposal.clientEmail && <p className="text-[10px] text-slate-500 truncate">{proposal.clientEmail}</p>}
+        </div>
+        <div>
+          <span className="text-slate-400 font-medium">Default Rate</span>
+          <p className="mt-0.5 font-bold text-slate-800">
+            {formatCents(proposal.hourlyRateCents, proposal.currency)}/hr
+          </p>
+          <p className="text-[10px] text-slate-500">{proposal.currency}</p>
+        </div>
+        <div>
+          <span className="text-slate-400 font-medium">Total Quote</span>
+          <p className="mt-0.5 font-bold text-indigo-700">{formatCents(proposal.totalCents, proposal.currency)}</p>
+          <p className="text-[10px] text-slate-500">{formatHours(proposal.totalHours)} total</p>
+        </div>
+        <div>
+          <span className="text-slate-400 font-medium">Created On</span>
+          <p className="mt-0.5 font-bold text-slate-800">{formatDate(proposal.createdAt)}</p>
+          <p className="text-[10px] text-slate-500">Updated {formatDate(proposal.updatedAt)}</p>
+        </div>
+      </div>
+
+      {/* Proposal Summary Notes */}
+      {proposal.summary && (
+        <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-3.5 text-xs text-slate-600">
+          <span className="font-semibold text-slate-800 block mb-1">Scope Summary</span>
+          <p className="leading-relaxed">{proposal.summary}</p>
+        </div>
+      )}
+
+      {/* Deliverables List */}
+      <div className="space-y-2.5">
+        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+          Deliverables ({proposal.items.length})
+        </h4>
+        {proposal.items.length === 0 ? (
+          <p className="text-xs text-slate-500">This proposal has no line items.</p>
+        ) : (
+          <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+            {proposal.items.map((item) => (
+              <div
+                key={item.position}
+                className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white p-2.5 text-xs"
+              >
+                <div className="space-y-0.5 pr-2">
+                  <p className="font-semibold text-slate-800">
+                    #{item.position + 1} {item.title}
+                  </p>
+                  {item.description && <p className="text-[11px] text-slate-500 line-clamp-2">{item.description}</p>}
+                </div>
+                <div className="text-right shrink-0">
+                  <span className="font-semibold text-slate-900">{formatHours(item.estimatedHours)}</span>
+                  <p className="text-[11px] text-slate-500">
+                    × {formatCents(item.hourlyRateCents, proposal.currency)}/hr
+                  </p>
+                  <p className="text-[11px] font-bold text-indigo-600">{formatCents(item.amountCents, proposal.currency)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs">
+          <span className="text-slate-500">Subtotal</span>
+          <span className="font-semibold text-slate-800">{formatCents(proposal.subtotalCents, proposal.currency)}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-semibold text-slate-800">Total</span>
+          <span className="font-bold text-indigo-700">{formatCents(proposal.totalCents, proposal.currency)}</span>
+        </div>
+      </div>
+
+      {(proposal.approvedAt || proposal.paidAt) && (
+        <div className="flex flex-wrap gap-4 text-[11px] text-slate-500">
+          {proposal.approvedAt && <span>Approved {formatDate(proposal.approvedAt)}</span>}
+          {proposal.paidAt && <span>Paid {formatDate(proposal.paidAt)}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface DialogContentProps {
   initialProposal: ProposalDetailItem;
   onClose: () => void;
@@ -69,7 +217,8 @@ function ProposalDetailModalDialog({
 }: DialogContentProps) {
   const proposalId = initialProposal.id;
 
-  const [proposalData, setProposalData] = useState<Proposal | null>(null);
+  const [detail, setDetail] = useState<ProposalDetailState>({ status: "loading" });
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   // Delivery / send state
   const [showSendConfirmation, setShowSendConfirmation] = useState(false);
@@ -82,26 +231,42 @@ function ProposalDetailModalDialog({
   const [copiedShareUrl, setCopiedShareUrl] = useState(false);
   const [clipboardError, setClipboardError] = useState<string | null>(null);
 
-  // The backend list endpoint returns summaries only; no GET-by-id route exists yet.
-  const activeProposal = proposalData || {
-    ...initialProposal,
-    briefId: null,
-    clientEmail: null,
-    summary: null,
-    approvedAt: null,
-    paidAt: null,
-    hourlyRateCents: 0,
-    totalHours: 0,
-    subtotalCents: initialProposal.totalCents,
-    updatedAt: initialProposal.createdAt,
-    items: [],
-  };
+  // Load the full proposal from GET /api/proposals/:id (again on retry).
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchProposalDetail(proposalId, controller.signal)
+      .then((proposal) => setDetail({ status: "ready", proposal }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setDetail({
+          status: "error",
+          error:
+            error instanceof ProposalDetailError
+              ? error
+              : new ProposalDetailError("network", "An unexpected error occurred while loading this proposal."),
+        });
+      });
+    return () => controller.abort();
+  }, [proposalId, loadAttempt]);
+
+  function handleRetryLoad() {
+    setDetail({ status: "loading" });
+    setLoadAttempt((attempt) => attempt + 1);
+  }
+
+  // Header fields come from the list summary until the detail has loaded.
+  const loaded = detail.status === "ready" ? detail.proposal : null;
+  const title = loaded?.title ?? initialProposal.title;
+  const status = loaded?.status ?? initialProposal.status;
+  const currency = loaded?.currency ?? initialProposal.currency;
+  const totalCents = loaded?.totalCents ?? initialProposal.totalCents;
+  const clientName = loaded?.clientName ?? initialProposal.clientName;
 
   const isTerminalStatus =
-    activeProposal.status === "approved" ||
-    activeProposal.status === "paid" ||
-    activeProposal.status === "rejected" ||
-    activeProposal.status === "cancelled";
+    status === "approved" ||
+    status === "paid" ||
+    status === "rejected" ||
+    status === "cancelled";
 
   // Handle proposal dispatch via POST /api/proposals/[id]/send
   async function handleSendProposal() {
@@ -155,7 +320,8 @@ function ProposalDetailModalDialog({
         const result: SendProposalResponse = parsed.data;
         setSendResult(result);
 
-        setProposalData(result.proposal);
+        // The send response carries the full, updated proposal.
+        setDetail({ status: "ready", proposal: result.proposal });
 
         setShowSendConfirmation(false);
 
@@ -184,9 +350,7 @@ function ProposalDetailModalDialog({
 
   // Safe clipboard copy handler with explicit fallback handling
   async function handleCopyShareUrl(url: string) {
-    const fullUrl = url.startsWith("http")
-      ? url
-      : `${typeof window !== "undefined" ? window.location.origin : ""}${url}`;
+    const fullUrl = toAbsoluteUrl(url);
 
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
@@ -226,20 +390,25 @@ function ProposalDetailModalDialog({
       />
 
       {/* Modal Dialog Card */}
-      <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200/90 bg-white p-6 shadow-2xl space-y-6 z-10 my-8">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="relative w-full max-w-2xl rounded-2xl border border-slate-200/90 bg-white p-6 shadow-2xl space-y-6 z-10 my-8"
+      >
         {/* Modal Header */}
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <span
                 className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${getStatusBadge(
-                  activeProposal.status
+                  status
                 )}`}
               >
-                {activeProposal.status}
+                {status}
               </span>
               <span className="text-[11px] text-slate-400 font-mono">
-                ID: {activeProposal.id.slice(0, 8)}...
+                ID: {proposalId.slice(0, 8)}...
               </span>
               <button
                 type="button"
@@ -250,7 +419,7 @@ function ProposalDetailModalDialog({
               </button>
             </div>
             <h2 className="text-xl font-bold tracking-tight text-slate-900">
-              {activeProposal.title}
+              {title}
             </h2>
           </div>
 
@@ -264,92 +433,7 @@ function ProposalDetailModalDialog({
           </button>
         </div>
 
-        {/* Proposal Summary Grid */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 text-xs">
-          <div>
-            <span className="text-slate-400 font-medium">Client</span>
-            <p className="mt-0.5 font-bold text-slate-800 truncate">
-              {activeProposal.clientName || "Not specified"}
-            </p>
-          </div>
-          <div>
-            <span className="text-slate-400 font-medium">Currency</span>
-            <p className="mt-0.5 font-bold text-slate-800">
-              {activeProposal.currency}
-            </p>
-          </div>
-          <div>
-            <span className="text-slate-400 font-medium">Total Quote</span>
-            <p className="mt-0.5 font-bold text-indigo-700">
-              {formatCents(activeProposal.totalCents, activeProposal.currency)}
-            </p>
-            {activeProposal.totalHours > 0 && (
-              <p className="text-[10px] text-slate-500">
-                {activeProposal.totalHours} total hours
-              </p>
-            )}
-          </div>
-          <div>
-            <span className="text-slate-400 font-medium">Created On</span>
-            <p className="mt-0.5 font-bold text-slate-800">
-              {formatDate(activeProposal.createdAt)}
-            </p>
-          </div>
-        </div>
-
-        {/* Proposal Summary Notes */}
-        {activeProposal.summary && (
-          <div className="rounded-xl border border-slate-100 bg-slate-50/50 p-3.5 text-xs text-slate-600">
-            <span className="font-semibold text-slate-800 block mb-1">
-              Scope Summary
-            </span>
-            <p className="leading-relaxed">{activeProposal.summary}</p>
-          </div>
-        )}
-        {!proposalData && (
-          <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-            The proposal list API currently provides summary data only. Full proposal details are not available from a
-            single-proposal endpoint yet.
-          </p>
-        )}
-
-        {/* Deliverables List */}
-        {activeProposal.items && activeProposal.items.length > 0 && (
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Deliverables ({activeProposal.items.length})
-            </h4>
-            <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-              {activeProposal.items.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between rounded-lg border border-slate-200/80 bg-white p-2.5 text-xs"
-                >
-                  <div className="space-y-0.5 pr-2">
-                    <p className="font-semibold text-slate-800">
-                      #{idx + 1} {item.title}
-                    </p>
-                    {item.description && (
-                      <p className="text-[11px] text-slate-500 line-clamp-1">
-                        {item.description}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="font-semibold text-slate-900">
-                      {item.estimatedHours} hrs
-                    </span>
-                    {item.amountCents !== undefined && (
-                      <p className="text-[11px] font-bold text-indigo-600">
-                        {formatCents(item.amountCents, activeProposal.currency)}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        <ProposalDetailContent state={detail} onRetry={handleRetryLoad} />
 
         {/* Active Client Share Link Display (from server response) */}
         {sendResult?.shareUrl && (
@@ -372,11 +456,7 @@ function ProposalDetailModalDialog({
               <input
                 type="text"
                 readOnly
-                value={
-                  typeof window !== "undefined"
-                    ? `${window.location.origin}${sendResult.shareUrl}`
-                    : sendResult.shareUrl
-                }
+                value={toAbsoluteUrl(sendResult.shareUrl)}
                 className="w-full font-mono text-[11px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800 select-all"
                 onFocus={(e) => e.target.select()}
               />
@@ -416,9 +496,9 @@ function ProposalDetailModalDialog({
 
             {isTerminalStatus ? (
               <span className="rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[10px] font-semibold text-slate-600">
-                Status Locked ({activeProposal.status})
+                Status Locked ({status})
               </span>
-            ) : activeProposal.status === "sent" ? (
+            ) : status === "sent" ? (
               <span className="rounded-full bg-blue-50 border border-blue-200 px-2.5 py-0.5 text-[10px] font-semibold text-blue-700">
                 Awaiting Client Response
               </span>
@@ -432,7 +512,7 @@ function ProposalDetailModalDialog({
           {/* Terminal Status Notice */}
           {isTerminalStatus && (
             <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600">
-              ℹ️ This proposal has reached the <strong>{activeProposal.status}</strong> stage. Further delivery dispatch is restricted to maintain transaction integrity.
+              ℹ️ This proposal has reached the <strong>{status}</strong> stage. Further delivery dispatch is restricted to maintain transaction integrity.
             </div>
           )}
 
@@ -457,7 +537,7 @@ function ProposalDetailModalDialog({
               >
                 <span>✉️</span>
                 <span>
-                  {activeProposal.status === "sent"
+                  {status === "sent"
                     ? "Resend / Update Client Link"
                     : "Send Proposal to Client"}
                 </span>
@@ -493,14 +573,14 @@ function ProposalDetailModalDialog({
 
             <div className="space-y-1.5 text-xs text-slate-700">
               <p>
-                <strong>Proposal:</strong> {activeProposal.title}
+                <strong>Proposal:</strong> {title}
               </p>
               <p>
-                <strong>Client:</strong> {activeProposal.clientName || "Unnamed Client"}
+                <strong>Client:</strong> {clientName || "Unnamed Client"}
               </p>
               <p>
                 <strong>Total Amount:</strong>{" "}
-                {formatCents(activeProposal.totalCents, activeProposal.currency)}
+                {formatCents(totalCents, currency)}
               </p>
             </div>
 
