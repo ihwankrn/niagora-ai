@@ -62,7 +62,7 @@ export default function AnalysisResultView({
 
             {isAiUnavailable && (
               <p className="text-[11px] text-red-800/80 leading-relaxed pt-1">
-                Kredit token AI/LLM pada backend sedang tidak mencukupi atau layanan model sedang sibuk. Data brief Anda tetap aman.
+                Layanan AI sedang tidak dapat diakses atau sedang sibuk. Data brief Anda tetap aman.
               </p>
             )}
 

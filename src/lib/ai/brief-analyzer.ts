@@ -1,7 +1,5 @@
 import "server-only";
 
-import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 
 import { ApiError } from "@/lib/api/http";
@@ -13,7 +11,14 @@ import {
 } from "@/lib/contracts/briefs";
 import { MAX_ITEM_HOURS, type ServiceType } from "@/lib/contracts/common";
 
-export const BRIEF_ANALYSIS_MODEL = "claude-opus-5-5";
+export const BRIEF_ANALYSIS_MODEL = "openai/gpt-oss-120b";
+
+const GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions";
+const MAX_COMPLETION_TOKENS = 6_000;
+const REQUEST_TIMEOUT_MS = 60_000;
+const RETRY_DELAYS_MS = [500, 1_500];
+// Longer waits fail fast: the client is waiting and can try again later.
+const MAX_RETRY_AFTER_SECONDS = 5;
 
 const SERVICE_LABELS: Record<ServiceType, string> = {
   web_development: "Web development",
@@ -59,17 +64,80 @@ export type BriefAnalysisResult = {
   model: string;
 };
 
-type AnalyzerClient = Pick<Anthropic, "beta">;
+// Only the fields this analyzer reads from the OpenAI-compatible response.
+const completionSchema = z.object({
+  model: z.string().optional(),
+  choices: z
+    .array(
+      z.object({
+        finish_reason: z.string().nullish(),
+        message: z.object({ content: z.string().nullish() }),
+      }),
+    )
+    .min(1),
+});
+type Completion = z.infer<typeof completionSchema>;
 
-let defaultClient: Anthropic | undefined;
-function getClient(): AnalyzerClient {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
-  if (!apiKey) {
-    throw new ApiError("AI_UNAVAILABLE", "AI analysis is not configured. Please try again later.");
+class ProviderFailure extends Error {
+  constructor(
+    readonly category: string,
+    readonly status?: number,
+    readonly apiErrorType?: string,
+  ) {
+    super(category);
   }
+}
 
-  defaultClient ??= new Anthropic({ apiKey, timeout: 90_000, maxRetries: 2 });
-  return defaultClient;
+function retryDelayMs(response: Response, attempt: number): number | null {
+  if (response.status !== 429 && response.status < 500) return null;
+  const retryAfter = Number(response.headers.get("retry-after") ?? Number.NaN);
+  if (Number.isFinite(retryAfter)) {
+    return retryAfter <= MAX_RETRY_AFTER_SECONDS ? retryAfter * 1_000 : null;
+  }
+  return RETRY_DELAYS_MS[attempt] ?? null;
+}
+
+async function failureFrom(response: Response) {
+  const body: unknown = await response.json().catch(() => null);
+  const parsed = z.object({ error: z.object({ type: z.string().optional() }) }).safeParse(body);
+  const apiErrorType = parsed.success ? parsed.data.error.type : undefined;
+  const category =
+    response.status === 429
+      ? "rate_limited"
+      : response.status === 401 || response.status === 403
+        ? "authentication_failed"
+        : "provider_error";
+  return new ProviderFailure(category, response.status, apiErrorType);
+}
+
+async function requestCompletion(apiKey: string, payload: unknown, fetchImpl: typeof fetch): Promise<Completion> {
+  for (let attempt = 0; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetchImpl(GROQ_CHAT_COMPLETIONS_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch {
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) throw new ProviderFailure("connection_failed");
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+
+    if (response.ok) {
+      const parsed = completionSchema.safeParse(await response.json().catch(() => null));
+      if (!parsed.success) throw new ProviderFailure("provider_error", response.status);
+      return parsed.data;
+    }
+
+    const delay = attempt < RETRY_DELAYS_MS.length ? retryDelayMs(response, attempt) : null;
+    if (delay === null) throw await failureFrom(response);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
 }
 
 // Turns raw model output into a contract-valid analysis: rounds hours to
@@ -107,67 +175,59 @@ export function sumHours(analysis: BriefAnalysis) {
 
 export async function analyzeBrief(
   input: { brief: string; serviceType: ServiceType },
-  client?: AnalyzerClient,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<BriefAnalysisResult> {
-  let response;
+  let completion: Completion;
   try {
-    const analyzerClient = client ?? getClient();
-    response = await analyzerClient.beta.messages.parse({
-      model: BRIEF_ANALYSIS_MODEL,
-      max_tokens: 16_000,
-      // On a safety decline, let the API retry on its recommended fallback model.
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: {
-        effort: "medium",
-        format: betaZodOutputFormat(modelOutputSchema),
-      },
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `Service category: ${SERVICE_LABELS[input.serviceType]}\n\n<client_brief>\n${input.brief}\n</client_brief>`,
+    const apiKey = process.env.GROQ_API_KEY?.trim();
+    if (!apiKey) throw new ProviderFailure("missing_configuration");
+
+    completion = await requestCompletion(
+      apiKey,
+      {
+        model: BRIEF_ANALYSIS_MODEL,
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
+        // Strict mode makes Groq guarantee that the output matches this schema.
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "brief_analysis", strict: true, schema: z.toJSONSchema(modelOutputSchema) },
         },
-      ],
-    });
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `Service category: ${SERVICE_LABELS[input.serviceType]}\n\n<client_brief>\n${input.brief}\n</client_brief>`,
+          },
+        ],
+      },
+      fetchImpl,
+    );
   } catch (error) {
-    let category = "request_failed";
-    let status: number | undefined;
-    let apiErrorType: string | undefined;
-
-    if (error instanceof Anthropic.RateLimitError) {
-      category = "rate_limited";
-      status = error.status;
-    } else if (error instanceof Anthropic.AuthenticationError) {
-      category = "authentication_failed";
-      status = error.status;
-    } else if (error instanceof Anthropic.APIConnectionError) {
-      category = "connection_failed";
-    } else if (error instanceof Anthropic.APIError) {
-      category = "provider_error";
-      status = error.status;
-      apiErrorType = error.type ?? undefined;
-    } else if (error instanceof ApiError && error.code === "AI_UNAVAILABLE") {
-      category = "missing_configuration";
-    }
-
+    const failure = error instanceof ProviderFailure ? error : new ProviderFailure("request_failed");
+    // Never logs the API key, the brief or the provider's message.
     console.error("Brief analysis provider request failed", {
-      provider: "anthropic",
-      category,
-      ...(status === undefined ? {} : { status }),
-      ...(apiErrorType === undefined ? {} : { apiErrorType }),
+      provider: "groq",
+      category: failure.category,
+      ...(failure.status === undefined ? {} : { status: failure.status }),
+      ...(failure.apiErrorType === undefined ? {} : { apiErrorType: failure.apiErrorType }),
     });
     throw new ApiError("AI_UNAVAILABLE", "The brief could not be analyzed. Please try again.");
   }
 
-  if (response.stop_reason === "refusal") {
-    throw new ApiError("AI_UNAVAILABLE", "This brief could not be analyzed. Please rephrase it and try again.");
+  const [choice] = completion.choices;
+  let output: ModelOutput | null = null;
+  if (choice.finish_reason !== "length" && choice.message.content) {
+    try {
+      output = modelOutputSchema.parse(JSON.parse(choice.message.content));
+    } catch {
+      output = null;
+    }
   }
-  if (response.stop_reason === "max_tokens" || !response.parsed_output) {
-    console.error("Brief analysis returned no usable output", response.stop_reason);
+  if (!output) {
+    console.error("Brief analysis returned no usable output", { finishReason: choice.finish_reason });
     throw new ApiError("AI_UNAVAILABLE", "The brief could not be analyzed. Please try again.");
   }
 
-  const analysis = toBriefAnalysis(response.parsed_output);
-  return { analysis, totalEstimatedHours: sumHours(analysis), model: response.model };
+  const analysis = toBriefAnalysis(output);
+  return { analysis, totalEstimatedHours: sumHours(analysis), model: completion.model ?? BRIEF_ANALYSIS_MODEL };
 }
