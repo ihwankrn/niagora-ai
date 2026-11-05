@@ -116,5 +116,5 @@ export default function PublicProposalClientPage({ shareToken }: { shareToken: s
     return <ErrorState />;
   }
 
-  return <PublicProposalView data={state.proposal} />;
+  return <PublicProposalView data={state.proposal} shareToken={shareToken} />;
 }

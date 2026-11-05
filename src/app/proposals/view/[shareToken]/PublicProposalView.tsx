@@ -1,7 +1,12 @@
+"use client";
+
+import { useState } from "react";
+
 import type { PublicProposalApiResponse } from "@/lib/contracts/public-proposals";
 import type { Currency } from "@/lib/contracts/common";
 import type { ProposalStatus } from "@/lib/contracts/proposals";
 
+import PublicProposalPayment from "./PublicProposalPayment";
 import PublicProposalFrame from "./PublicProposalFrame";
 
 function formatCurrency(cents: number, currency: Currency): string {
@@ -53,8 +58,15 @@ function getStatusBadge(status: ProposalStatus) {
   }
 }
 
-export default function PublicProposalView({ data }: { data: PublicProposalApiResponse }) {
-  const badge = getStatusBadge(data.status);
+export default function PublicProposalView({
+  data,
+  shareToken,
+}: {
+  data: PublicProposalApiResponse;
+  shareToken: string;
+}) {
+  const [status, setStatus] = useState(data.status);
+  const badge = getStatusBadge(status);
 
   return (
     <PublicProposalFrame showPrint>
@@ -195,16 +207,13 @@ export default function PublicProposalView({ data }: { data: PublicProposalApiRe
             </div>
           </div>
 
-          <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/60 p-4 text-xs text-slate-600">
-            <div className="flex items-center gap-1.5 font-bold text-slate-800">
-              <span>ℹ️</span>
-              <span>Proposal Status & Acceptance</span>
-            </div>
-            <p className="leading-relaxed">
-              This shared proposal is in <strong>read-only mode</strong>. Contact the freelancer directly with
-              questions or to discuss next steps.
-            </p>
-          </div>
+          <PublicProposalPayment
+            token={shareToken}
+            initialStatus={status}
+            currency={data.currency}
+            totalCents={data.totalCents}
+            onStatusChange={setStatus}
+          />
         </div>
       </div>
     </PublicProposalFrame>
