@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { captureOrder, createOrder, formatAmount, getOrder, getPaypalConfig, PaypalApiError, resetPaypalTokenCache } from "./client";
@@ -27,6 +30,13 @@ describe("formatAmount", () => {
     [50, "0.50"],
     [100_000_000, "1000000.00"],
   ])("%s cents -> %s", (cents, value) => expect(formatAmount(cents)).toBe(value));
+
+  it.each([-1, -150, 1.5, 650.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid cents %s",
+    (cents) => {
+      expect(() => formatAmount(cents)).toThrow(RangeError);
+    },
+  );
 });
 
 describe("getPaypalConfig", () => {
@@ -42,6 +52,33 @@ describe("getPaypalConfig", () => {
     vi.stubEnv("PAYPAL_ENVIRONMENT", "sandbox");
     vi.stubEnv("PAYPAL_CLIENT_SECRET", "");
     expect(() => getPaypalConfig()).toThrow(/CLIENT_SECRET/);
+  });
+
+  it.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+    "rejects the inherited prototype key %s as an environment",
+    (environment) => {
+      vi.stubEnv("PAYPAL_ENVIRONMENT", environment);
+      expect(() => getPaypalConfig()).toThrow(/sandbox/);
+    },
+  );
+
+  it.each(["live", "LIVE", "production", " sandbox", "Sandbox"])("refuses PAYPAL_ENVIRONMENT=%j", (environment) => {
+    vi.stubEnv("PAYPAL_ENVIRONMENT", environment);
+    expect(() => getPaypalConfig()).toThrow(/PayPal Live is disabled/);
+  });
+
+  it("sends nothing to PayPal when the environment is live", async () => {
+    vi.stubEnv("PAYPAL_ENVIRONMENT", "live");
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await expect(getOrder("ORDER1", fetchImpl)).rejects.toThrow(/PayPal Live is disabled/);
+    await expect(captureOrder("ORDER1", "req-1-capture", fetchImpl)).rejects.toThrow(/PayPal Live is disabled/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("never targets the Live API host", () => {
+    expect(getPaypalConfig().baseUrl).toBe("https://api-m.sandbox.paypal.com");
+    expect(readFileSync(fileURLToPath(new URL("./client.ts", import.meta.url)), "utf8")).not.toContain("api-m.paypal.com");
   });
 });
 
@@ -104,6 +141,95 @@ describe("PayPal requests", () => {
   });
 });
 
+describe("token handling", () => {
+  const tokenCalls = (fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>) =>
+    fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/v1/oauth2/token")).length;
+
+  it.each([
+    ["a null body", null],
+    ["a missing access token", { expires_in: 3600 }],
+    ["a blank access token", { access_token: "   ", expires_in: 3600 }],
+    ["a non-string access token", { access_token: 123, expires_in: 3600 }],
+    ["a missing lifetime", { access_token: "A" }],
+    ["a zero lifetime", { access_token: "A", expires_in: 0 }],
+    ["a negative lifetime", { access_token: "A", expires_in: -60 }],
+    ["an infinite lifetime", { access_token: "A", expires_in: "Infinity" }],
+  ])("rejects %s", async (_label, body) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => json(200, body));
+
+    const error = await getOrder("A", fetchImpl).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(PaypalApiError);
+    expect(error).toMatchObject({ status: 502, issue: "INVALID_TOKEN_RESPONSE", retryable: false });
+    // A provider contract violation is not retried.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one in-flight token request between concurrent callers", async () => {
+    let releaseToken!: (response: Response) => void;
+    const pendingToken = new Promise<Response>((resolve) => {
+      releaseToken = resolve;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => pendingToken)
+      .mockResolvedValueOnce(json(200, { id: "A", status: "APPROVED" }))
+      .mockResolvedValueOnce(json(200, { id: "B", status: "APPROVED" }));
+
+    const first = getOrder("A", fetchImpl);
+    const second = getOrder("B", fetchImpl);
+    // Let both callers reach getAccessToken before the token resolves.
+    await Promise.resolve();
+
+    releaseToken(token());
+
+    expect(await Promise.all([first, second])).toHaveLength(2);
+    expect(tokenCalls(fetchImpl)).toBe(1);
+  });
+
+  it("does not cache a token for longer than its (short) lifetime", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const fetchImpl = fakeFetch(
+        json(200, { access_token: "SHORT", expires_in: 1 }),
+        json(200, { id: "A", status: "APPROVED" }),
+        json(200, { access_token: "LATER", expires_in: 3600 }),
+        json(200, { id: "A", status: "APPROVED" }),
+      );
+
+      await getOrder("A", fetchImpl);
+      // A 1s lifetime refreshes 0.5s early, so the token is already stale here.
+      nowSpy.mockReturnValue(1_000_501);
+      await getOrder("A", fetchImpl);
+
+      expect(tokenCalls(fetchImpl)).toBe(2);
+      expect((fetchImpl.mock.calls[3][1]!.headers as Record<string, string>).authorization).toBe("Bearer LATER");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("caps an absurdly long token lifetime at 24 hours", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const fetchImpl = fakeFetch(
+        json(200, { access_token: "FOREVER", expires_in: 2_000_000_000 }),
+        json(200, { id: "A", status: "APPROVED" }),
+        json(200, { access_token: "NEW", expires_in: 3600 }),
+        json(200, { id: "A", status: "APPROVED" }),
+      );
+
+      await getOrder("A", fetchImpl);
+      nowSpy.mockReturnValue(1_000_000 + 24 * 60 * 60 * 1000 + 1);
+      await getOrder("A", fetchImpl);
+
+      expect(tokenCalls(fetchImpl)).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});
+
 describe("retries for transient errors", () => {
   const networkError = () => new TypeError("fetch failed");
 
@@ -148,6 +274,36 @@ describe("retries for transient errors", () => {
 
     const ids = fetchImpl.mock.calls.slice(1).map(([, init]) => (init!.headers as Record<string, string>)["paypal-request-id"]);
     expect(ids).toEqual(["req-1", "req-1"]);
+  });
+
+  it("retries a GET after a request timeout", async () => {
+    const timeoutError = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(token())
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(json(200, { id: "A", status: "COMPLETED" }));
+
+    expect(await settle(getOrder("A", fetchImpl))).toEqual({ value: { id: "A", status: "COMPLETED" } });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a capture after a request timeout", async () => {
+    const timeoutError = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(token()).mockRejectedValueOnce(timeoutError());
+
+    const result = await settle(captureOrder("ORDER1", "req-1-capture", fetchImpl));
+
+    expect(result).toEqual({ error: expect.objectContaining({ name: "TimeoutError" }) });
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith("/capture"))).toHaveLength(1);
+  });
+
+  it("rejects a non-object provider response instead of returning it as an order", async () => {
+    const fetchImpl = fakeFetch(token(), json(200, null));
+    await expect(captureOrder("ORDER1", "req-1-capture", fetchImpl)).rejects.toMatchObject({
+      status: 502,
+      issue: "INVALID_RESPONSE",
+    });
   });
 
   it("never retries a capture, even after a network error", async () => {

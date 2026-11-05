@@ -3,12 +3,9 @@ import "server-only";
 // Minimal PayPal REST client for Orders v2 (developer.paypal.com/docs/api/orders/v2/).
 // Credentials stay on the server; the browser only ever sees order ids.
 
-const BASE_URLS = {
-  sandbox: "https://api-m.sandbox.paypal.com",
-  live: "https://api-m.paypal.com",
-} as const;
-
-export type PaypalEnvironment = keyof typeof BASE_URLS;
+// Sandbox only. The Live API host is deliberately absent, so no configuration
+// value can send a real payment through this client.
+const SANDBOX_BASE_URL = "https://api-m.sandbox.paypal.com";
 
 export type PaypalAmount = { currency_code: string; value: string };
 
@@ -34,79 +31,147 @@ export type PaypalOrder = {
   links?: Array<{ href: string; rel: string; method?: string }>;
 };
 
+const REQUEST_TIMEOUT_MS = 20_000;
+const MAX_TOKEN_LIFETIME_SECONDS = 24 * 60 * 60;
+export const RETRY_DELAYS_MS = [300, 1_000];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export class PaypalApiError extends Error {
   readonly status: number;
   readonly issue: string | undefined; // e.g. ORDER_NOT_APPROVED, ORDER_ALREADY_CAPTURED
   readonly debugId: string | undefined;
+  // Locally detected contract violations (invalid body) are not worth retrying.
+  readonly retryable: boolean;
 
-  constructor(status: number, body: { name?: string; message?: string; debug_id?: string; details?: { issue?: string }[] }) {
-    super(`PayPal API ${status}: ${body.name ?? "error"}${body.message ? ` - ${body.message}` : ""}`);
+  constructor(status: number, body: unknown, options: { retryable?: boolean } = {}) {
+    const record = isRecord(body) ? body : {};
+    const name = typeof record.name === "string" ? record.name : undefined;
+    const message = typeof record.message === "string" ? record.message : undefined;
+    const debugId = typeof record.debug_id === "string" ? record.debug_id : undefined;
+    const details = Array.isArray(record.details) ? record.details.filter(isRecord) : [];
+    const firstIssue = details[0]?.issue;
+    const issue = typeof firstIssue === "string" ? firstIssue : name;
+
+    // Keep messages short and never include request headers or credentials.
+    super(`PayPal API ${status}: ${name ?? "error"}${message ? ` - ${message.slice(0, 300)}` : ""}`);
     this.name = "PaypalApiError";
     this.status = status;
-    this.issue = body.details?.[0]?.issue ?? body.name;
-    this.debugId = body.debug_id;
+    this.issue = issue;
+    this.debugId = debugId;
+    this.retryable = options.retryable ?? (status === 429 || status >= 500);
   }
 }
 
 export function getPaypalConfig() {
-  const environment = (process.env.PAYPAL_ENVIRONMENT ?? "sandbox") as PaypalEnvironment;
-  const clientId = process.env.PAYPAL_CLIENT_ID;
-  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  const environment = process.env.PAYPAL_ENVIRONMENT ?? "sandbox";
+  const clientId = process.env.PAYPAL_CLIENT_ID?.trim();
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET?.trim();
 
-  if (!(environment in BASE_URLS)) {
-    throw new Error('PAYPAL_ENVIRONMENT must be "sandbox" or "live"');
+  if (environment !== "sandbox") {
+    throw new Error('PAYPAL_ENVIRONMENT must be "sandbox": PayPal Live is disabled');
   }
   if (!clientId || !clientSecret) {
     throw new Error("PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET must be set");
   }
-  return { environment, baseUrl: BASE_URLS[environment], clientId, clientSecret };
+  return { environment, baseUrl: SANDBOX_BASE_URL, clientId, clientSecret };
 }
 
-let cachedToken: { value: string; expiresAt: number; key: string } | undefined;
+type CachedToken = { value: string; expiresAt: number; key: string };
+type OAuthToken = { access_token: string; expires_in: number };
+
+let cachedToken: CachedToken | undefined;
+let pendingToken: { key: string; promise: Promise<{ token: string; baseUrl: string }> } | undefined;
+
+function parseTokenResponse(json: unknown): OAuthToken {
+  if (!isRecord(json)) {
+    throw new PaypalApiError(
+      502,
+      { name: "INVALID_TOKEN_RESPONSE", message: "PayPal returned an invalid OAuth response" },
+      { retryable: false },
+    );
+  }
+
+  const accessToken = json.access_token;
+  const expiresIn = Number(json.expires_in);
+  if (typeof accessToken !== "string" || accessToken.trim() === "" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new PaypalApiError(
+      502,
+      { name: "INVALID_TOKEN_RESPONSE", message: "PayPal returned an invalid OAuth response" },
+      { retryable: false },
+    );
+  }
+
+  return { access_token: accessToken, expires_in: expiresIn };
+}
 
 async function getAccessToken(fetchImpl: typeof fetch) {
   const config = getPaypalConfig();
   const key = `${config.environment}:${config.clientId}`;
+
   if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
     return { token: cachedToken.value, baseUrl: config.baseUrl };
   }
+  // Share one in-flight request between concurrent callers. Requesting a token
+  // has no side effects, so retrying a failed request is safe.
+  if (pendingToken?.key === key) {
+    return pendingToken.promise;
+  }
 
-  // Requesting a token has no side effects, so it is always safe to retry.
-  const body = await withRetry(true, async () => {
-    const response = await fetchImpl(`${config.baseUrl}/v1/oauth2/token`, {
-      method: "POST",
-      headers: {
-        authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: "grant_type=client_credentials",
-      cache: "no-store",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const request = (async () => {
+    const body = await withRetry(true, async () => {
+      const response = await fetchImpl(`${config.baseUrl}/v1/oauth2/token`, {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "grant_type=client_credentials",
+        cache: "no-store",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      const json: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new PaypalApiError(response.status, json);
+      }
+      return parseTokenResponse(json);
     });
-    const json = await response.json().catch(() => ({}));
-    if (!response.ok || typeof json.access_token !== "string") {
-      throw new PaypalApiError(response.status, json);
-    }
-    return json as { access_token: string; expires_in: number };
-  });
 
-  // Refresh a minute early.
-  cachedToken = { value: body.access_token, expiresAt: Date.now() + (Number(body.expires_in) - 60) * 1000, key };
-  return { token: body.access_token as string, baseUrl: config.baseUrl };
+    // Refresh a minute early, but never let a very short lifetime produce a
+    // negative/zero cache window. An absurdly long lifetime is capped so a bad
+    // provider response cannot pin a token forever.
+    const lifetimeMs = Math.min(body.expires_in, MAX_TOKEN_LIFETIME_SECONDS) * 1000;
+    const skewMs = Math.min(60_000, Math.floor(lifetimeMs / 2));
+    cachedToken = { value: body.access_token, expiresAt: Date.now() + lifetimeMs - skewMs, key };
+    return { token: body.access_token, baseUrl: config.baseUrl };
+  })();
+
+  pendingToken = { key, promise: request };
+  try {
+    return await request;
+  } finally {
+    if (pendingToken?.promise === request) {
+      pendingToken = undefined;
+    }
+  }
 }
 
 export function resetPaypalTokenCache() {
   cachedToken = undefined;
+  pendingToken = undefined;
 }
-
-const REQUEST_TIMEOUT_MS = 20_000;
-export const RETRY_DELAYS_MS = [300, 1_000];
 
 // Network failures, timeouts, 429 and 5xx may succeed on a later attempt
 // (developer.paypal.com/api/rest/reference/idempotency/). 4xx errors will not.
 export function isTransientPaypalError(error: unknown) {
-  if (error instanceof PaypalApiError) return error.status === 429 || error.status >= 500;
-  return error instanceof TypeError || (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name));
+  if (error instanceof PaypalApiError) return error.retryable;
+  if (error instanceof TypeError) return true;
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return ["TimeoutError", "AbortError"].includes(error.name);
+  }
+  return error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name);
 }
 
 async function withRetry<T>(retry: boolean, attempt: () => Promise<T>): Promise<T> {
@@ -141,9 +206,16 @@ async function request<T>(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    const body = await response.json().catch(() => ({}));
+    const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {
       throw new PaypalApiError(response.status, body);
+    }
+    if (!isRecord(body)) {
+      throw new PaypalApiError(
+        502,
+        { name: "INVALID_RESPONSE", message: "PayPal returned an invalid response" },
+        { retryable: false },
+      );
     }
     return body as T;
   });
@@ -200,5 +272,8 @@ export function getOrder(orderId: string, fetchImpl?: typeof fetch) {
 
 // PayPal amounts are strings with exactly 2 decimals for the supported currencies.
 export function formatAmount(cents: number) {
-  return `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+  if (!Number.isSafeInteger(cents) || cents < 0) {
+    throw new RangeError("PayPal amount must be a non-negative safe integer in cents");
+  }
+  return `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
 }

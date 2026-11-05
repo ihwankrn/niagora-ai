@@ -127,10 +127,10 @@ export async function getDashboardStats(userId: string): Promise<DashboardStats>
   const [totalProjects, pendingProposals, paidProjects, revenue] = await Promise.all([
     prisma.proposal.count({ where: { userId } }),
     prisma.proposal.count({ where: { userId, status: "SENT" } }),
-    prisma.proposal.count({ where: { userId, payments: { some: VERIFIED_PAYMENT } } }),
+    prisma.proposal.count({ where: { userId, status: "PAID", payments: { some: VERIFIED_PAYMENT } } }),
     prisma.payment.groupBy({
       by: ["currency"],
-      where: { ...VERIFIED_PAYMENT, proposal: { userId } },
+      where: { ...VERIFIED_PAYMENT, proposal: { userId, status: "PAID" } },
       _sum: { amountCents: true },
       orderBy: { currency: "asc" },
     }),

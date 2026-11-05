@@ -46,6 +46,9 @@ enum PaymentStatus {
   COMPLETED
   FAILED
   VOIDED
+  // PayPal captured the payment, but the local payment/proposal transition
+  // could not be applied safely. Needs manual or scripted reconciliation.
+  REVIEW
 }
 
 model User {
@@ -146,6 +149,8 @@ model Payment {
   payerEmail      String?         @map("payer_email")
   // Verified PayPal API response kept for audit.
   providerPayload Json?           @map("provider_payload")
+  // Why a captured payment could not be reconciled automatically (REVIEW).
+  reviewReason    String?         @map("review_reason")
   verifiedAt      DateTime?       @map("verified_at") @db.Timestamptz(3)
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)

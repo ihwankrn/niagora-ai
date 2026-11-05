@@ -116,9 +116,32 @@ describe("getDashboardStats", () => {
     expect(db.proposal.count.mock.calls.map((call) => call[0])).toEqual([
       { where: { userId: user.id } },
       { where: { userId: user.id, status: "SENT" } },
-      { where: { userId: user.id, payments: { some: verified } } },
+      { where: { userId: user.id, status: "PAID", payments: { some: verified } } },
     ]);
-    expect(db.payment.groupBy.mock.calls[0][0].where).toEqual({ ...verified, proposal: { userId: user.id } });
+    expect(db.payment.groupBy.mock.calls[0][0].where).toEqual({
+      ...verified,
+      proposal: { userId: user.id, status: "PAID" },
+    });
+  });
+
+  it("never counts a payment in REVIEW, or a payment whose proposal is not PAID, as revenue", async () => {
+    db.proposal.count.mockResolvedValue(0);
+    db.payment.groupBy.mockResolvedValue([]);
+
+    await getDashboardStats(user.id);
+
+    // REVIEW is deliberately absent: only COMPLETED payments with a verified
+    // capture count. The proposal must also be PAID, so a COMPLETED payment left
+    // on a non-PAID proposal (an inconsistent/review-worthy state) is excluded
+    // until it is reconciled.
+    const verified = { status: "COMPLETED", verifiedAt: { not: null } };
+    expect(db.proposal.count.mock.calls[2][0]).toEqual({
+      where: { userId: user.id, status: "PAID", payments: { some: verified } },
+    });
+    expect(db.payment.groupBy.mock.calls[0][0].where).toEqual({
+      ...verified,
+      proposal: { userId: user.id, status: "PAID" },
+    });
   });
 
   it("returns an empty revenue list when nothing is paid", async () => {

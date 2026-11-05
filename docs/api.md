@@ -71,7 +71,7 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 | 502 | `AI_UNAVAILABLE` | LLM gagal atau output tidak valid — tampilkan pesan & tombol coba lagi |
 | 409 | `PAYMENT_NOT_APPROVED` | Pembayar belum menyetujui order di PayPal |
 | 422 | `PAYMENT_DECLINED` | Metode pembayaran ditolak PayPal — panggil `actions.restart()` di tombol PayPal |
-| 502 | `PAYMENT_PROVIDER_ERROR` | PayPal API gagal, atau pembayaran tidak lolos verifikasi (ditandai untuk ditinjau) |
+| 502 | `PAYMENT_PROVIDER_ERROR` | PayPal API gagal, pembayaran tidak lolos verifikasi, atau status pembayaran tidak bisa disimpan atau dikonfirmasi di database. Jangan mulai pembayaran baru; lihat [tabel respons capture](#post-apipublicproposalstokenpaypalcapture) |
 | 500 | `INTERNAL_ERROR` | Error tak terduga (detail tidak pernah dikirim ke browser) |
 
 ---
@@ -320,8 +320,8 @@ Definisi `stats` (dihitung dari **semua** proposal user, bukan hanya `items` yan
 |---|---|---|
 | `totalProjects` | Total projects | Jumlah semua proposal |
 | `pendingProposals` | Pending proposals | Proposal berstatus `sent` (menunggu respons klien) |
-| `paidProjects` | Paid projects | Proposal dengan pembayaran PayPal `COMPLETED` yang sudah diverifikasi server |
-| `revenueReceived` | Revenue received | Jumlah capture PayPal terverifikasi, **satu entri per mata uang**; nominal beda mata uang tidak pernah dijumlahkan. Array kosong jika belum ada pembayaran |
+| `paidProjects` | Paid projects | Proposal berstatus `paid` dengan pembayaran PayPal `COMPLETED` yang sudah diverifikasi server. Pembayaran `REVIEW` tidak dihitung |
+| `revenueReceived` | Revenue received | Jumlah capture PayPal terverifikasi pada proposal berstatus `paid`, **satu entri per mata uang**; pembayaran `REVIEW` tidak dihitung; nominal beda mata uang tidak pernah dijumlahkan. Array kosong jika belum ada pembayaran |
 
 ---
 
@@ -342,11 +342,15 @@ Aturan keamanan:
 
 - **Nominal tidak pernah dari browser.** `paypal/orders` tidak menerima body; nominal & mata uang diambil dari proposal tersimpan.
 - **Redirect/`onApprove` bukan bukti bayar.** Setelah capture, server mengambil ulang order dari PayPal dan mencocokkan order id, `reference_id` (= proposal), `custom_id` (= payment), mata uang, dan nominal order maupun capture. Hanya capture `COMPLETED` yang lolos verifikasi yang menandai proposal `paid`.
-- **Tidak ada capture ganda.** Capture memakai `PayPal-Request-Id` yang tetap per pembayaran; capture ulang untuk pembayaran yang sudah selesai langsung mengembalikan hasil tersimpan tanpa memanggil PayPal. Database hanya mengizinkan satu order terbuka dan satu pembayaran selesai per proposal.
+- **Tidak ada capture ganda.** Capture memakai `PayPal-Request-Id` yang tetap per pembayaran; capture ulang untuk pembayaran yang sudah selesai langsung mengembalikan hasil tersimpan tanpa memanggil PayPal. Database hanya mengizinkan satu pembayaran terbuka (`CREATED`, `APPROVED`, atau `REVIEW`) dan satu pembayaran selesai per proposal.
 - **Rekonsiliasi setelah error jaringan.** Server selalu membaca order dari PayPal sebelum capture. Jika PayPal sudah meng-capture order (misalnya respons capture sebelumnya hilang), server memverifikasi dan mencatatnya **tanpa mengirim capture lagi**. Jadi setelah `502 PAYMENT_PROVIDER_ERROR`, Frontend aman memanggil endpoint capture lagi dengan `orderId` yang sama. Request capture ke PayPal tidak pernah di-retry otomatis; pembacaan order dan pembuatan order di-retry otomatis untuk error sementara.
+- **`REVIEW` memblokir order baru.** `PaymentStatus.REVIEW` berarti pembayaran butuh rekonsiliasi, misalnya PayPal sudah meng-capture tetapi hasilnya tidak aman diterapkan ke proposal. Selama ada pembayaran `REVIEW`, `POST .../paypal/orders` menjawab `409 CONFLICT` tanpa memanggil PayPal. Index unik parsial `payments_one_open_per_proposal` (`CREATED`, `APPROVED`, `REVIEW`) menjadi pengaman terakhir di database, sehingga klien tidak bisa tertagih dua kali lewat order kedua. Status ini internal dan tidak muncul di respons API.
+- **Keluar dari `REVIEW` hanya dengan bukti.** Capture ulang boleh mengubahnya menjadi `COMPLETED` jika capture terverifikasi dan proposal masih `approved`, atau menjadi `FAILED` jika PayPal menunjukkan capture ditolak atau gagal. Pembayaran `COMPLETED` tidak pernah diturunkan statusnya. Belum ada endpoint operator untuk menyelesaikan `REVIEW`, jadi kasus yang tidak selesai lewat capture ulang harus ditangani manual.
 - Token di link klien adalah rahasia (32 byte acak). Token salah format atau tidak dikenal → `404`. Proposal `draft` tidak bisa dilihat klien.
 
-Frontend butuh `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (client id Sandbox, publik) untuk memuat PayPal JS SDK.
+- **Hanya Sandbox.** Host PayPal Live tidak ada di kode. `PAYPAL_ENVIRONMENT` selain `sandbox` ditolak sebelum request apa pun dikirim, dan klien menerima `502 PAYMENT_PROVIDER_ERROR`.
+
+Frontend butuh `NEXT_PUBLIC_PAYPAL_CLIENT_ID` (client id Sandbox, publik) untuk memuat PayPal JS SDK. Panduan uji manual ada di [`paypal-sandbox-e2e.md`](paypal-sandbox-e2e.md).
 
 ### `POST /api/proposals/:id/send` (login)
 
@@ -391,7 +395,7 @@ Tanpa body. `sent` → `approved`. Idempoten untuk `approved`/`paid`; `409` untu
 
 ### `POST /api/public/proposals/:token/paypal/orders`
 
-Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. Respons `201`:
+Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. `409 CONFLICT` juga dikembalikan jika ada pembayaran `REVIEW` ("needs review and cannot be replaced automatically") atau capture yang masih diproses. Respons `201`:
 
 ```json
 { "data": { "orderId": "5O190127TN364715T", "approveUrl": "https://www.sandbox.paypal.com/checkoutnow?token=5O190127TN364715T", "amountCents": 50000, "currency": "USD" } }
@@ -412,7 +416,65 @@ Respons `200`:
 ```
 
 - `paymentStatus: "pending"` → PayPal menerima capture tetapi belum selesai; proposal tetap `approved`, tampilkan "pembayaran diproses".
-- `404` jika order bukan milik proposal ini; `409 PAYMENT_NOT_APPROVED`; `422 PAYMENT_DECLINED`; `502 PAYMENT_PROVIDER_ERROR` (aman untuk dicoba ulang kecuali pesannya menyebut "flagged for review").
+- `404` jika order bukan milik proposal ini; `409 PAYMENT_NOT_APPROVED`; `409 CONFLICT` jika pembayaran atau proposal tidak lagi berlaku; `422 PAYMENT_DECLINED`.
+
+#### Respons `502 PAYMENT_PROVIDER_ERROR`
+
+Semua kasus di bawah memakai `code` yang sama. **Untuk `502` apa pun: jangan memulai order baru.** Tampilkan bahwa pembayaran sedang diverifikasi, lalu izinkan memanggil capture lagi dengan `orderId` yang sama. Itu aman karena server selalu membaca order dari PayPal lebih dulu. Jangan membuat logika berdasarkan isi `message`.
+
+| `message` | Arti | Status tersimpan |
+|---|---|---|
+| "The payment provider is unavailable. Please try again." | PayPal tidak bisa dihubungi atau gagal menjawab | Tidak berubah |
+| "The payment could not be completed. Please try again." | Setelah capture dicoba, PayPal belum menunjukkan capture | Tidak berubah |
+| "The payment could not be verified." | Order tidak cocok dan tidak ada capture yang memindahkan uang | `FAILED` |
+| "The payment state could not be saved. Please retry this request or contact support." | Status pembayaran gagal ditulis, atau hasil tersimpan gagal dibaca | **Tidak diketahui** |
+| "The payment could not be saved for review. Do not start a new payment; please retry this request or contact support." | Status `REVIEW` gagal disimpan atau tidak terkonfirmasi | **Tidak diketahui**; `REVIEW` tidak boleh dianggap tercatat |
+| Pesan yang menyebut "flagged for review" atau "under review" | Pembayaran butuh rekonsiliasi | Biasanya `REVIEW`; `COMPLETED` tetap `COMPLETED` dan hanya diberi catatan alasan |
+
+Kegagalan database setelah pembayaran terverifikasi tidak pernah menghasilkan `200` palsu atau `500` generik:
+
+- **`repairProposalPaid()`** dipakai saat pembayaran sudah `COMPLETED` terverifikasi tetapi proposal masih `approved`. Penulisan `approved` → `paid` yang error mungkin saja sudah ter-commit, jadi server membaca ulang kedua baris. Sukses hanya jika pembayaran terverifikasi **dan** proposal `paid`. Jika pembacaan ulang gagal, responsnya `502` "state could not be saved". Jika proposal terbukti belum `paid`, responsnya `502` "flagged for review".
+- **`storedCompletion()`** membaca hasil yang sudah tersimpan, misalnya setelah request lain menang saat capture bersamaan. Jika pembacaan gagal, responsnya `502` "state could not be saved", karena pembacaan yang gagal bukan bukti pembayaran.
+- **Capture `PENDING`** yang gagal disimpan atau dibaca ulang juga menghasilkan `502` "state could not be saved", karena PayPal sudah memegang capture tersebut.
+
+Jika database sudah tidak terjangkau saat request baru mulai, responsnya tetap `500 INTERNAL_ERROR`, sebelum capture apa pun dikirim. Aturannya sama: jangan memulai order baru.
+
+---
+
+## Pengujian integrasi PostgreSQL
+
+`npm run test:integration` menguji invarian pembayaran di PostgreSQL sungguhan: index unik parsial, capture dan order bersamaan, atomisitas, dan imutabilitas `REVIEW`/`COMPLETED`. PayPal di-mock, jadi tidak ada panggilan ke PayPal.
+
+> **Peringatan: sebelum setiap test, suite ini menjalankan `TRUNCATE` pada `payments`, `proposals`, `proposal_items`, `briefs`, dan `users`.** Pakai hanya database uji sekali pakai, misalnya PostgreSQL lokal. Jangan pernah mengarahkannya ke project Supabase aplikasi.
+
+Sebelum membuka koneksi, guard di test menghentikan suite jika `TEST_DATABASE_URL`:
+
+- memakai nama database tanpa kata `test`, misalnya `postgres`, `niagora`, atau `latest`. `niagora_test`, `niagora_ai_test`, dan `test_db` diterima.
+- bukan URL `postgresql://` atau `postgres://` yang valid dan menyebut host.
+- memakai parameter query yang membelokkan koneksi (`host`, `hostaddr`, `port`, `database`, `dbname`, `service`).
+- sama dengan `DATABASE_URL` atau `DIRECT_URL`, baik string persis maupun host, port, dan nama database yang sama. Nilai pembanding dibaca dari shell dan dari file `.env`, `.env.local`, `.env.development*`, serta `.env.production*` milik checkout ini.
+
+`TEST_DATABASE_URL` hanya dibaca dari shell, tidak dari file `.env`, supaya nilai yang tersimpan tidak bisa menyalakan `TRUNCATE`.
+
+Tetap periksa URL-nya sendiri, karena guard punya batas: database lain berisi data penting yang namanya memuat `test` tetap lolos, dan guard tidak bisa melihat file `.env` milik checkout lain.
+
+Langkah:
+
+1. Siapkan database uji kosong, lalu terapkan migrasi ke database itu. Langkah ini terpisah, karena suite tidak pernah menjalankan migrasi dan akan berhenti dengan error jika skema belum lengkap. Prisma CLI membaca `DIRECT_URL`, dan nilai dari shell tidak ditimpa oleh `.env`:
+
+   ```bash
+   DIRECT_URL="postgresql://USER:PASSWORD@localhost:5432/niagora_test" npx prisma migrate deploy
+   ```
+
+2. Jalankan suite:
+
+   ```bash
+   TEST_DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/niagora_test" npm run test:integration
+   ```
+
+Tanpa `TEST_DATABASE_URL`, suite ini dilewati (`skipped`), jadi `npm test` yang lulus **bukan** bukti invarian PostgreSQL sudah teruji. Sebaliknya, jika variabel itu di-export di shell, `npm test` juga menjalankan suite ini beserta `TRUNCATE`-nya.
+
+Saat deploy, terapkan migrasi `20261103*` **sebelum** kode yang bisa menulis `REVIEW`.
 
 ---
 
