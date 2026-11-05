@@ -471,7 +471,21 @@ async function completedPaymentResponse(
   throw reviewError("The payment is recorded but the proposal could not be confirmed as paid. It has been flagged for review.");
 }
 
+// A browser that closed after capturing has lost its orderId and cannot call the
+// capture endpoint again, so an order request records that capture instead. The
+// capture flow reads the order first and sends no capture for a COMPLETED order.
+async function recordExistingCapture(token: string, orderId: string): Promise<never> {
+  const result = await capturePaypalOrder(token, orderId);
+  throw new ApiError(
+    "CONFLICT",
+    result.proposalStatus === "paid"
+      ? "This proposal is already paid"
+      : "A payment for this proposal is being processed. Please refresh.",
+  );
+}
+
 async function reuseOpenPayment(
+  token: string,
   payment: PaymentForPaymentFlow,
   proposal: ProposalForPaymentFlow,
   amountCents: number,
@@ -480,7 +494,7 @@ async function reuseOpenPayment(
   if (payment.paypalCaptureId) {
     // A capture has already been attempted and may still be settling. Creating
     // another order here could charge the client twice.
-    throw new ApiError("CONFLICT", "A payment for this proposal is being processed. Please refresh.");
+    return recordExistingCapture(token, payment.paypalOrderId);
   }
 
   if (!paymentMatchesProposal(payment, proposal, currency)) {
@@ -500,7 +514,7 @@ async function reuseOpenPayment(
   }
 
   if (order.status === "COMPLETED") {
-    throw new ApiError("CONFLICT", "A payment for this proposal is being finalized. Please refresh.");
+    return recordExistingCapture(token, payment.paypalOrderId);
   }
   if (DEAD_ORDER_STATUSES.includes(order.status)) {
     await retireOpenPayment(payment.id);
@@ -640,7 +654,7 @@ export async function createPaypalOrder(token: string): Promise<CreatePaypalOrde
       where: { proposalId: proposal.id, status: { in: [...OPEN_PAYMENT_STATUSES] } },
     });
     if (open) {
-      const reused = await reuseOpenPayment(open, proposal, amountCents, currency);
+      const reused = await reuseOpenPayment(token, open, proposal, amountCents, currency);
       if (reused) return reused;
       // The open order was confirmed dead and retired; a new order is safe.
     }
@@ -700,7 +714,7 @@ export async function createPaypalOrder(token: string): Promise<CreatePaypalOrde
       });
       if (!winner) throw error;
       if (winner.status === "REVIEW") throw reviewConflictError();
-      const reused = await reuseOpenPayment(winner, proposal, amountCents, currency);
+      const reused = await reuseOpenPayment(token, winner, proposal, amountCents, currency);
       if (reused) return reused;
       // Winner was confirmed dead and retired; retry once.
     }

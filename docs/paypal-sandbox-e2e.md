@@ -10,6 +10,7 @@ Panduan ini menguji alur nyata melawan PayPal Sandbox: membuat order, capture, l
    - `DATABASE_URL`, `DIRECT_URL`
    - `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
    - `PAYPAL_ENVIRONMENT="sandbox"`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` dari Sandbox app
+   - `NEXT_PUBLIC_PAYPAL_CLIENT_ID`, nilainya harus sama dengan `PAYPAL_CLIENT_ID`. Tombol PayPal di browser memakai nilai ini, dan perubahannya baru berlaku setelah server di-restart
    - `APP_BASE_URL="http://localhost:3000"`
 2. Migrasi `20261103*` sudah diterapkan, karena Prisma membaca kolom `payments.review_reason`. Cek statusnya (hanya membaca):
 
@@ -143,6 +144,22 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/api/public/proposals/$T
 
 Harapan: `404`, karena order itu bukan milik proposal ini.
 
+## Alur klien di browser
+
+Setelah langkah 0–2, sisanya bisa diuji lewat halaman klien, sebagai pengganti langkah 3–6:
+
+1. Cetak link klien, lalu buka di browser:
+
+   ```bash
+   echo "$BASE/proposals/view/$TOKEN"
+   ```
+
+2. Tekan **Setujui Proposal**. Tombol PayPal muncul setelah status menjadi `approved`.
+3. Bayar lewat tombol PayPal dengan akun Sandbox Personal. Harapan: halaman menampilkan "Pembayaran telah dikonfirmasi". Lanjutkan dengan langkah 7 dan 8. `ORDER_ID` untuk langkah 8 bisa dilihat di kolom `paypal_order_id` tabel `payments`.
+4. Muat ulang halaman. Harapan: status tetap `paid` dan tombol PayPal tidak muncul.
+
+Halaman ini tidak punya webhook. Jika tab tertutup setelah capture, status baru tercatat saat klien membuka link lagi dan menekan tombol PayPal; server menolak order baru dan halaman menampilkan status `paid`.
+
 ## Postman
 
 Pakai method, URL, dan body yang sama dengan curl di atas.
@@ -172,4 +189,3 @@ Simpan `id`, `token`, dan `orderId` sebagai variabel environment Postman. Matika
 
 - Status `REVIEW` dan kegagalan database tidak bisa dipicu dengan aman lewat alur nyata. Keduanya diuji di `payment-flow.test.ts` dan `service.test.ts`.
 - Invarian PostgreSQL (index unik, capture bersamaan) diuji lewat `npm run test:integration`; lihat [`api.md`](api.md#pengujian-integrasi-postgresql).
-- Tombol PayPal JS SDK di Frontend. Pastikan `NEXT_PUBLIC_PAYPAL_CLIENT_ID` sama dengan `PAYPAL_CLIENT_ID`.

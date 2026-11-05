@@ -4,7 +4,9 @@ import {
   approvePublicProposal,
   capturePublicProposalPaypalOrder,
   createPublicProposalPaypalOrder,
+  decidePaymentConflict,
   PublicProposalPaymentError,
+  readLatestProposalStatus,
 } from "./payment-client";
 
 const TOKEN = "a".repeat(43);
@@ -119,5 +121,40 @@ describe("public proposal payment client", () => {
       status: 502,
       code: "PAYMENT_PROVIDER_ERROR",
     });
+  });
+});
+
+describe("decidePaymentConflict", () => {
+  it.each(["paid", "cancelled", "rejected", "sent"] as const)(
+    "shows the current status when the proposal is %s, whatever the source",
+    (status) => {
+      expect(decidePaymentConflict("create-order", status)).toEqual({ kind: "show-status", status });
+      expect(decidePaymentConflict("capture", status)).toEqual({ kind: "show-status", status });
+    },
+  );
+
+  it("blocks a new payment when an order request conflicts on a still-approved proposal", () => {
+    expect(decidePaymentConflict("create-order", "approved")).toEqual({ kind: "blocked" });
+  });
+
+  it("lets the client start again when a captured order is no longer valid", () => {
+    expect(decidePaymentConflict("capture", "approved")).toEqual({ kind: "restart-payment" });
+  });
+
+  it("never offers a new payment when the status cannot be read", () => {
+    expect(decidePaymentConflict("create-order", null)).toEqual({ kind: "blocked" });
+    expect(decidePaymentConflict("capture", null)).toEqual({ kind: "retry-capture" });
+  });
+});
+
+describe("readLatestProposalStatus", () => {
+  it("returns the status from the public endpoint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { ...proposal, status: "paid" } }), { status: 200 })));
+    await expect(readLatestProposalStatus(TOKEN)).resolves.toBe("paid");
+  });
+
+  it("returns null instead of throwing when the status cannot be read", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(readLatestProposalStatus(TOKEN)).resolves.toBeNull();
   });
 });

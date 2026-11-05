@@ -395,7 +395,11 @@ Tanpa body. `sent` → `approved`. Idempoten untuk `approved`/`paid`; `409` untu
 
 ### `POST /api/public/proposals/:token/paypal/orders`
 
-Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. `409 CONFLICT` juga dikembalikan jika ada pembayaran `REVIEW` ("needs review and cannot be replaced automatically") atau capture yang masih diproses. Respons `201`:
+Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. `409 CONFLICT` juga dikembalikan jika ada pembayaran `REVIEW` ("needs review and cannot be replaced automatically") atau capture yang masih diproses.
+
+Jika order terbuka ternyata sudah di-capture di PayPal, misalnya tab klien tertutup sebelum capture tercatat, endpoint ini mencatatnya tanpa mengirim capture lagi, lalu menjawab `409` ("already paid") dan tidak membuat order baru. Jika pencatatan gagal, responsnya `502`. Karena satu kode `409` punya beberapa sebab, Frontend sebaiknya membaca ulang status proposal, bukan menafsirkan isi `message`.
+
+Respons `201`:
 
 ```json
 { "data": { "orderId": "5O190127TN364715T", "approveUrl": "https://www.sandbox.paypal.com/checkoutnow?token=5O190127TN364715T", "amountCents": 50000, "currency": "USD" } }

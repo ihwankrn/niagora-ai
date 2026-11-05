@@ -7,6 +7,8 @@ import {
   createPaypalOrderResponseSchema,
   publicProposalSchema,
 } from "@/lib/contracts/payments";
+import type { ProposalStatus } from "@/lib/contracts/proposals";
+import { fetchPublicProposal } from "@/lib/proposals/public-client";
 
 export class PublicProposalPaymentError extends Error {
   constructor(
@@ -88,4 +90,39 @@ export function capturePublicProposalPaypalOrder(token: string, orderId: string)
     request,
     capturePaypalOrderResponseSchema,
   );
+}
+
+export type PaymentConflictSource = "create-order" | "capture";
+
+export type PaymentConflictOutcome =
+  | { kind: "show-status"; status: ProposalStatus }
+  | { kind: "restart-payment" }
+  | { kind: "blocked" }
+  | { kind: "retry-capture" };
+
+// 409 CONFLICT covers several situations with one code, so the UI decides from
+// the proposal's current status rather than from the error message text.
+// latestStatus is null when the status could not be read.
+export function decidePaymentConflict(
+  source: PaymentConflictSource,
+  latestStatus: ProposalStatus | null,
+): PaymentConflictOutcome {
+  if (latestStatus !== null && latestStatus !== "approved") {
+    return { kind: "show-status", status: latestStatus };
+  }
+  if (source === "create-order") {
+    // No new order can start: a payment is still processing or needs review.
+    return { kind: "blocked" };
+  }
+  // The order is no longer valid. A new order request is safe: the server refuses
+  // it if a payment is in review, and records any capture it finds.
+  return latestStatus === "approved" ? { kind: "restart-payment" } : { kind: "retry-capture" };
+}
+
+export async function readLatestProposalStatus(token: string): Promise<ProposalStatus | null> {
+  try {
+    return (await fetchPublicProposal(token)).status;
+  } catch {
+    return null;
+  }
 }

@@ -9,7 +9,10 @@ import {
   approvePublicProposal,
   capturePublicProposalPaypalOrder,
   createPublicProposalPaypalOrder,
+  decidePaymentConflict,
+  type PaymentConflictSource,
   PublicProposalPaymentError,
+  readLatestProposalStatus,
 } from "@/lib/proposals/payment-client";
 
 interface PaypalButtons {
@@ -61,7 +64,7 @@ export default function PublicProposalPayment({
   const [isApproving, setIsApproving] = useState(false);
   const [captureOrderId, setCaptureOrderId] = useState<string | null>(null);
   const [captureState, setCaptureState] = useState<CaptureState | null>(null);
-  const [reviewBlocked, setReviewBlocked] = useState(false);
+  const [paymentBlocked, setPaymentBlocked] = useState(false);
   const [sdkReady, setSdkReady] = useState(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -74,6 +77,32 @@ export default function PublicProposalPayment({
         intent: "capture",
       }).toString()}`
     : null;
+
+  // 409 CONFLICT has several causes, so act on the proposal's current status.
+  const resolveConflict = useCallback(
+    async (source: PaymentConflictSource) => {
+      const outcome = decidePaymentConflict(source, await readLatestProposalStatus(token));
+      if (outcome.kind === "show-status") {
+        setProposalStatus(outcome.status);
+        onStatusChange(outcome.status);
+        setCaptureOrderId(null);
+        setCaptureState(null);
+        setMessage(null);
+      } else if (outcome.kind === "restart-payment") {
+        setCaptureOrderId(null);
+        setCaptureState(null);
+        setMessage("Order pembayaran ini sudah tidak berlaku. Silakan mulai pembayaran lagi.");
+      } else if (outcome.kind === "blocked") {
+        setPaymentBlocked(true);
+        setCaptureState(null);
+        setMessage(null);
+      } else {
+        setCaptureState("retry");
+        setMessage("Status capture belum dapat dipastikan. Tekan Coba Lagi untuk memeriksa order yang sama.");
+      }
+    },
+    [onStatusChange, token],
+  );
 
   const captureOrder = useCallback(
     async (orderId: string) => {
@@ -99,9 +128,7 @@ export default function PublicProposalPayment({
           error.status === 409 &&
           error.code === "CONFLICT"
         ) {
-          setReviewBlocked(true);
-          setCaptureState(null);
-          setMessage(null);
+          await resolveConflict("capture");
           return;
         }
 
@@ -126,7 +153,7 @@ export default function PublicProposalPayment({
         );
       }
     },
-    [onStatusChange, token],
+    [onStatusChange, resolveConflict, token],
   );
 
   useEffect(() => {
@@ -137,7 +164,7 @@ export default function PublicProposalPayment({
       !paypal ||
       !container ||
       proposalStatus !== "approved" ||
-      reviewBlocked ||
+      paymentBlocked ||
       captureState
     ) {
       return;
@@ -164,11 +191,12 @@ export default function PublicProposalPayment({
               return order.orderId;
             } catch (error: unknown) {
               if (active && error instanceof PublicProposalPaymentError && error.status === 409) {
-                setReviewBlocked(true);
-                setMessage(null);
+                await resolveConflict("create-order");
               } else if (active) {
+                // A failed order request can also mean an earlier payment could
+                // not be recorded, so never tell the client that nothing was paid.
                 setMessage(
-                  "Order pembayaran belum dapat dibuat. Tidak ada pembayaran yang dikirim; silakan coba lagi.",
+                  "Order pembayaran belum dapat dibuat. Jika Anda sudah pernah membayar proposal ini, jangan bayar lagi dan periksa kembali nanti. Jika belum, silakan coba lagi.",
                 );
               }
               throw error;
@@ -181,7 +209,8 @@ export default function PublicProposalPayment({
           },
           onCancel: () => setMessage("Pembayaran dibatalkan. Anda dapat melanjutkan kapan saja."),
           onError: () => {
-            setMessage("PayPal mengalami kendala. Jika pembayaran telah disetujui, gunakan Coba Lagi.");
+            // Keep a more specific message set by createOrder or onApprove.
+            setMessage((current) => current ?? "PayPal mengalami kendala. Muat ulang halaman lalu coba lagi.");
           },
         });
         return buttons;
@@ -206,7 +235,7 @@ export default function PublicProposalPayment({
         });
       }
     };
-  }, [captureOrder, captureState, proposalStatus, reviewBlocked, sdkReady, token]);
+  }, [captureOrder, captureState, paymentBlocked, proposalStatus, resolveConflict, sdkReady, token]);
 
   async function handleApprove() {
     setIsApproving(true);
@@ -229,9 +258,19 @@ export default function PublicProposalPayment({
     }
   }
 
+  async function handleRecheck() {
+    setPaymentBlocked(false);
+    setMessage(null);
+    const latestStatus = await readLatestProposalStatus(token);
+    if (latestStatus && latestStatus !== proposalStatus) {
+      setProposalStatus(latestStatus);
+      onStatusChange(latestStatus);
+    }
+  }
+
   const canApprove = proposalStatus === "sent" && !isApproving;
   const showSandboxScript =
-    proposalStatus === "approved" && !reviewBlocked && captureState === null && Boolean(sdkUrl);
+    proposalStatus === "approved" && !paymentBlocked && captureState === null && Boolean(sdkUrl);
 
   return (
     <section
@@ -258,12 +297,19 @@ export default function PublicProposalPayment({
         </button>
       ) : null}
 
-      {proposalStatus === "approved" && reviewBlocked ? (
-        <div
-          role="status"
-          className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
-        >
-          Pembayaran Anda sedang diverifikasi oleh sistem. Silakan tunggu konfirmasi.
+      {proposalStatus === "approved" && paymentBlocked ? (
+        <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p role="status" className="text-sm text-amber-900">
+            Pembayaran baru belum bisa dimulai karena ada pembayaran untuk proposal ini yang sedang diproses atau ditinjau.
+            Jangan bayar lagi. Periksa kembali beberapa saat lagi, atau hubungi freelancer jika statusnya tidak berubah.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleRecheck()}
+            className="rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm font-semibold text-amber-900 transition hover:bg-amber-100"
+          >
+            Periksa Lagi
+          </button>
         </div>
       ) : null}
 
@@ -299,8 +345,9 @@ export default function PublicProposalPayment({
         <p role="status" className="text-sm text-slate-600">Memverifikasi pembayaran...</p>
       ) : null}
 
-      {proposalStatus === "approved" && !reviewBlocked && captureState === null ? (
+      {proposalStatus === "approved" && !paymentBlocked && captureState === null ? (
         <>
+          {message ? <p role="alert" className="text-sm text-amber-900">{message}</p> : null}
           {sdkUrl ? (
             <>
               {showSandboxScript ? (

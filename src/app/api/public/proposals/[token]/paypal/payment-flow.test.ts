@@ -155,11 +155,68 @@ describe("POST .../paypal/orders", () => {
     expect(paypal.createOrder).not.toHaveBeenCalled();
   });
 
-  it("answers 409 while an open payment already has a capture that may settle", async () => {
-    db.payment.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(payment("APPROVED", { paypalCaptureId: "CAP1" }));
+  describe("after the tab closed before the capture response was recorded", () => {
+    const openOrder = (status: string, extra: Record<string, unknown> = {}) => {
+      db.payment.findFirst
+        .mockResolvedValueOnce(null) // REVIEW lookup
+        .mockResolvedValueOnce(payment(status, extra)) // open payment lookup
+        .mockResolvedValue(payment(status, extra)); // lookup by order id during reconciliation
+    };
 
-    await expectApiError(await callOrders(), 409, "CONFLICT");
-    expect(paypal.createOrder).not.toHaveBeenCalled();
+    it("records the captured payment without capturing again, then answers 409 already paid", async () => {
+      openOrder("CREATED");
+      paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "COMPLETED"));
+      db.payment.findUniqueOrThrow.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1", verifiedAt: now }));
+
+      const response = await callOrders();
+
+      const body = await response.json();
+      expect(response.status).toBe(409);
+      expect(body.error).toEqual({ code: "CONFLICT", message: "This proposal is already paid" });
+      expect(paypal.captureOrder).not.toHaveBeenCalled();
+      expect(paypal.createOrder).not.toHaveBeenCalled();
+      expect(db.payment.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED", paypalCaptureId: "CAP1" }) }),
+      );
+      expect(db.proposal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }),
+      );
+    });
+
+    it("records a pending capture that has since completed", async () => {
+      openOrder("APPROVED", { paypalCaptureId: "CAP1" });
+      paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "COMPLETED"));
+      db.payment.findUniqueOrThrow.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1", verifiedAt: now }));
+
+      await expectApiError(await callOrders(), 409, "CONFLICT");
+
+      expect(db.proposal.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }),
+      );
+      expect(paypal.createOrder).not.toHaveBeenCalled();
+    });
+
+    it("keeps blocking a new order while the capture is still pending", async () => {
+      openOrder("APPROVED", { paypalCaptureId: "CAP1" });
+      paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "PENDING"));
+      db.payment.findUniqueOrThrow.mockResolvedValue(payment("APPROVED", { paypalCaptureId: "CAP1" }));
+
+      await expectApiError(await callOrders(), 409, "CONFLICT");
+
+      expect(db.proposal.updateMany).not.toHaveBeenCalled();
+      expect(paypal.createOrder).not.toHaveBeenCalled();
+    });
+
+    it("answers 502 and creates no new order when recording the captured payment fails", async () => {
+      openOrder("CREATED");
+      paypal.getOrder.mockResolvedValue(paypalOrder("COMPLETED", "COMPLETED"));
+      db.$transaction.mockRejectedValue(dbDown());
+      db.payment.findUnique.mockRejectedValue(dbDown());
+
+      await expectApiError(await callOrders(), 502, "PAYMENT_PROVIDER_ERROR");
+
+      expect(paypal.createOrder).not.toHaveBeenCalled();
+    });
   });
 
   it("answers 502 when an expired open order cannot be retired, and creates no second order", async () => {
