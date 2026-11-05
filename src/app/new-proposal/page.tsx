@@ -366,7 +366,7 @@ export default function NewProposalPage() {
                 <p className="mt-1 text-xs text-slate-500 max-w-2xl leading-relaxed">
                   Paste the raw brief from your client conversation. Niagora AI
                   will structure it into milestones, deliverable hours,
-                  clarification questions, and escrow-ready estimates.
+                  clarification questions, and estimates ready for verification.
                 </p>
               </div>
 

@@ -63,8 +63,12 @@ type AnalyzerClient = Pick<Anthropic, "beta">;
 
 let defaultClient: Anthropic | undefined;
 function getClient(): AnalyzerClient {
-  // Reads ANTHROPIC_API_KEY from the environment.
-  defaultClient ??= new Anthropic({ timeout: 90_000, maxRetries: 2 });
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!apiKey) {
+    throw new ApiError("AI_UNAVAILABLE", "AI analysis is not configured. Please try again later.");
+  }
+
+  defaultClient ??= new Anthropic({ apiKey, timeout: 90_000, maxRetries: 2 });
   return defaultClient;
 }
 
@@ -103,11 +107,12 @@ export function sumHours(analysis: BriefAnalysis) {
 
 export async function analyzeBrief(
   input: { brief: string; serviceType: ServiceType },
-  client: AnalyzerClient = getClient(),
+  client?: AnalyzerClient,
 ): Promise<BriefAnalysisResult> {
   let response;
   try {
-    response = await client.beta.messages.parse({
+    const analyzerClient = client ?? getClient();
+    response = await analyzerClient.beta.messages.parse({
       model: BRIEF_ANALYSIS_MODEL,
       max_tokens: 16_000,
       // On a safety decline, let the API retry on its recommended fallback model.
@@ -126,17 +131,32 @@ export async function analyzeBrief(
       ],
     });
   } catch (error) {
+    let category = "request_failed";
+    let status: number | undefined;
+    let apiErrorType: string | undefined;
+
     if (error instanceof Anthropic.RateLimitError) {
-      console.error("Claude rate limit reached", error.status);
+      category = "rate_limited";
+      status = error.status;
     } else if (error instanceof Anthropic.AuthenticationError) {
-      console.error("Claude authentication failed: check ANTHROPIC_API_KEY");
+      category = "authentication_failed";
+      status = error.status;
     } else if (error instanceof Anthropic.APIConnectionError) {
-      console.error("Claude connection failed", error.message);
+      category = "connection_failed";
     } else if (error instanceof Anthropic.APIError) {
-      console.error("Claude API error", error.status, error.type, error.message);
-    } else {
-      console.error("Brief analysis request failed", error);
+      category = "provider_error";
+      status = error.status;
+      apiErrorType = error.type ?? undefined;
+    } else if (error instanceof ApiError && error.code === "AI_UNAVAILABLE") {
+      category = "missing_configuration";
     }
+
+    console.error("Brief analysis provider request failed", {
+      provider: "anthropic",
+      category,
+      ...(status === undefined ? {} : { status }),
+      ...(apiErrorType === undefined ? {} : { apiErrorType }),
+    });
     throw new ApiError("AI_UNAVAILABLE", "The brief could not be analyzed. Please try again.");
   }
 

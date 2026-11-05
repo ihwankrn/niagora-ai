@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/http";
 
@@ -37,6 +37,11 @@ async function expectAiUnavailable(promise: Promise<unknown>) {
   expect(error).toBeInstanceOf(ApiError);
   expect((error as ApiError).code).toBe("AI_UNAVAILABLE");
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe("toBriefAnalysis", () => {
   it("assigns server UUIDs, trims text and rounds hours to 2 decimals", () => {
@@ -129,9 +134,29 @@ describe("analyzeBrief", () => {
   });
 
   it("maps SDK errors to AI_UNAVAILABLE without leaking details", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     await expectAiUnavailable(analyzeBrief(input, failingClient(new Anthropic.APIConnectionError({ message: "socket hang up" }))));
     await expectAiUnavailable(analyzeBrief(input, failingClient(new Error("boom"))));
-    spy.mockRestore();
+  });
+
+  it("returns a structured AI_UNAVAILABLE error when the API key is missing", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const error = await analyzeBrief(input).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      code: "AI_UNAVAILABLE",
+      status: 502,
+      message: "The brief could not be analyzed. Please try again.",
+    });
+    expect(log).toHaveBeenCalledWith("Brief analysis provider request failed", {
+      provider: "anthropic",
+      category: "missing_configuration",
+    });
   });
 });
