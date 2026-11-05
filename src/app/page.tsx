@@ -310,7 +310,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#F8FAFC] text-slate-900 antialiased selection:bg-indigo-500 selection:text-white">
-      <div className="flex min-h-screen">
+      <div id="dashboard" className="flex min-h-screen">
         {/* Main Sidebar */}
         <Sidebar
           activePage="dashboard"
@@ -395,7 +395,7 @@ export default function Home() {
                   <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
                     Transform unstructured client briefs into detailed scope
                     breakdowns, realistic hours, ready-to-sign proposals, and
-                    planned PayPal escrow settlement.
+                    planned PayPal checkout verification.
                   </p>
                 </div>
 

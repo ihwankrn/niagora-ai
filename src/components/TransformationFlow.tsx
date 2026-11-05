@@ -34,7 +34,7 @@ const steps: FlowStep[] = [
     id: "paid",
     number: "04",
     title: "Paid Project",
-    subtitle: "PayPal checkout & release",
+    subtitle: "PayPal checkout & verification",
     badge: "Planned integration",
   },
 ];
