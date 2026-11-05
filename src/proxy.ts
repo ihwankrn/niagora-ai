@@ -5,6 +5,13 @@ import { type NextRequest, NextResponse } from "next/server";
 // Components cannot write cookies. getClaims verifies the token and refreshes it
 // when needed. Access control stays in requireUser.
 export async function proxy(request: NextRequest) {
+  // Supabase email links return to the Site URL with ?code=... by default.
+  if (request.nextUrl.pathname === "/" && request.nextUrl.searchParams.has("code")) {
+    const callback = request.nextUrl.clone();
+    callback.pathname = "/auth/callback";
+    return NextResponse.redirect(callback);
+  }
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   let response = NextResponse.next({ request });

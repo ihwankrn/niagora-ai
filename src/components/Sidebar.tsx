@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 
+import SignOutButton from "@/components/SignOutButton";
+
 interface SidebarProps {
   activePage?: string;
   isMobileOpen?: boolean;
@@ -204,6 +206,7 @@ export default function Sidebar({
             </p>
           </div>
         </div>
+        <SignOutButton />
       </div>
     </div>
   );

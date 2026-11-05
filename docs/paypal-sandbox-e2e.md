@@ -19,8 +19,9 @@ Panduan ini menguji alur nyata melawan PayPal Sandbox: membuat order, capture, l
    ```
 
    Jika masih ada migrasi tertunda, terapkan dulu dengan persetujuan pemilik database. Panduan ini tidak menjalankan migrasi.
-3. Ada user uji di Supabase (Dashboard → Authentication → Users → Add user, centang auto confirm) dan akun Sandbox Personal (developer.paypal.com → Testing Tools → Sandbox Accounts).
-4. Server berjalan di terminal lain:
+3. **Site URL** di Supabase (Dashboard → Authentication → URL Configuration) mengarah ke origin aplikasi, karena link konfirmasi email kembali ke sana lalu diteruskan ke `/auth/callback`.
+4. Ada user uji di Supabase (Dashboard → Authentication → Users → Add user, centang auto confirm) dan akun Sandbox Personal (developer.paypal.com → Testing Tools → Sandbox Accounts).
+5. Server berjalan di terminal lain:
 
    ```bash
    npm run dev

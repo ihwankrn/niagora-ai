@@ -26,6 +26,8 @@ Status implementasi:
 | `POST /api/public/proposals/:token/paypal/capture` | 🆕 perlu review FE | Unit-tested; belum diuji ke PayPal Sandbox |
 | `POST /api/paypal/webhook` | Dipanggil PayPal, bukan Frontend | Unit-tested, rekonsiliasi diuji ke PostgreSQL; belum menerima event nyata dari PayPal |
 
+Sesi browser: `/login` untuk sign-in dan pendaftaran, `/auth/callback` untuk link konfirmasi email, dan tombol **Sign out** di sidebar yang mengakhiri sesi di browser itu saja. Jika kode dari link gagal ditukar, misalnya link dibuka di browser lain, pengguna diarahkan ke `/login?link=failed` untuk sign-in manual.
+
 ## Aturan umum
 
 - **Base URL:** same-origin (`/api/...`). Semua body `Content-Type: application/json`, maksimal 64 KB.

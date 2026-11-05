@@ -1,30 +1,35 @@
 "use client";
 
-import { createBrowserClient } from "@supabase/ssr";
-import { useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { type FormEvent, Suspense, useState } from "react";
+
+import { createSupabaseBrowserClient } from "@/lib/auth/browser-client";
 
 type Mode = "sign-in" | "sign-up";
-
-function createClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !publishableKey) throw new Error("Sign-in is not configured.");
-  return createBrowserClient(url, publishableKey);
-}
 
 const fieldClass =
   "mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const linkFailed = useSearchParams().get("link") === "failed";
   const [mode, setMode] = useState<Mode>("sign-in");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(
+    linkFailed ? "That link could not sign you in. If you just confirmed your email, sign in below." : null,
+  );
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -32,7 +37,7 @@ export default function LoginPage() {
     setError(null);
     setNotice(null);
     try {
-      const auth = createClient().auth;
+      const auth = createSupabaseBrowserClient().auth;
       const result =
         mode === "sign-in"
           ? await auth.signInWithPassword({ email, password })

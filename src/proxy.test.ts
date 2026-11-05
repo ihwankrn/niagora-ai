@@ -36,6 +36,13 @@ describe("proxy", () => {
     expect(supabase.getClaims).toHaveBeenCalledOnce();
   });
 
+  it("sends an email link that lands on the dashboard to the callback, keeping its code", async () => {
+    const response = await proxy(new NextRequest("https://example.test/?code=abc"));
+
+    expect(response.headers.get("location")).toBe("https://example.test/auth/callback?code=abc");
+    expect(supabase.createServerClient).not.toHaveBeenCalled();
+  });
+
   it("does nothing when Supabase is not configured", async () => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
     await proxy(request());
