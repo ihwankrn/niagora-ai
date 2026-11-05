@@ -17,18 +17,26 @@ const DB_SERVICE_TYPES: Record<ServiceType, DbServiceType> = {
   content_writing: "CONTENT_WRITING",
 };
 
-export async function analyzeAndStoreBrief(user: AuthUser, input: AnalyzeBriefRequest): Promise<AnalyzeBriefResponse> {
-  const recent = await prisma.brief.count({
-    where: { userId: user.id, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
+// Stores the brief first so failed attempts are recorded and count toward the
+// limit. The row lock on the user serializes each user's check and insert, so
+// concurrent requests cannot all read a count below the limit.
+export async function createBriefWithinLimit(user: AuthUser, input: AnalyzeBriefRequest) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
+    const recent = await tx.brief.count({
+      where: { userId: user.id, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } },
+    });
+    if (recent >= MAX_ANALYSES_PER_HOUR) {
+      throw new ApiError("RATE_LIMITED", "Too many briefs analyzed in the last hour. Please try again later.");
+    }
+    return tx.brief.create({
+      data: { userId: user.id, serviceType: DB_SERVICE_TYPES[input.serviceType], rawText: input.brief },
+    });
   });
-  if (recent >= MAX_ANALYSES_PER_HOUR) {
-    throw new ApiError("RATE_LIMITED", "Too many briefs analyzed in the last hour. Please try again later.");
-  }
+}
 
-  // Store the brief first so failed attempts are recorded and count toward the limit.
-  const brief = await prisma.brief.create({
-    data: { userId: user.id, serviceType: DB_SERVICE_TYPES[input.serviceType], rawText: input.brief },
-  });
+export async function analyzeAndStoreBrief(user: AuthUser, input: AnalyzeBriefRequest): Promise<AnalyzeBriefResponse> {
+  const brief = await createBriefWithinLimit(user, input);
 
   let result;
   try {

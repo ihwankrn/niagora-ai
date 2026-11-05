@@ -32,7 +32,7 @@ Jalankan semua perintah di bawah dalam **satu terminal yang sama**, karena nilai
 
 ### 0. Ambil cookie sesi freelancer
 
-Halaman `/login` belum ada, jadi cookie diambil dengan skrip. Cookie ini adalah sesi aktif: jangan dibagikan atau di-commit.
+Panduan curl ini mengambil cookie dengan skrip. Untuk uji lewat browser, masuk lewat halaman `/login`. Cookie ini adalah sesi aktif: jangan dibagikan atau di-commit.
 
 ```bash
 read -rs "TEST_USER_PASSWORD?Password user uji: " && export TEST_USER_PASSWORD
@@ -158,7 +158,7 @@ Setelah langkah 0–2, sisanya bisa diuji lewat halaman klien, sebagai pengganti
 3. Bayar lewat tombol PayPal dengan akun Sandbox Personal. Harapan: halaman menampilkan "Pembayaran telah dikonfirmasi". Lanjutkan dengan langkah 7 dan 8. `ORDER_ID` untuk langkah 8 bisa dilihat di kolom `paypal_order_id` tabel `payments`.
 4. Muat ulang halaman. Harapan: status tetap `paid` dan tombol PayPal tidak muncul.
 
-Halaman ini tidak punya webhook. Jika tab tertutup setelah capture, status baru tercatat saat klien membuka link lagi dan menekan tombol PayPal; server menolak order baru dan halaman menampilkan status `paid`.
+Jika tab tertutup setelah capture, status tercatat saat webhook `PAYMENT.CAPTURE.COMPLETED` tiba, atau saat klien membuka link lagi dan menekan tombol PayPal; server menolak order baru dan halaman menampilkan status `paid`. Webhook butuh URL publik dan `PAYPAL_WEBHOOK_ID`, jadi di localhost hanya jalur kedua yang berjalan.
 
 ## Postman
 
@@ -181,11 +181,12 @@ Simpan `id`, `token`, dan `orderId` sebagai variabel environment Postman. Matika
 | `502 PAYMENT_PROVIDER_ERROR` saat capture | PayPal gagal menjawab, koneksi putus, atau status gagal disimpan | **Jangan buat order baru.** Periksa order di dashboard Sandbox, lalu ulangi langkah 6 dengan `orderId` yang sama. Server membaca order lebih dulu, jadi tidak ada capture ganda |
 | `502` saat order dibuat, log `PayPal Live is disabled` | `PAYPAL_ENVIRONMENT` bukan `sandbox` | Perbaiki `.env`, restart server |
 | `409 PAYMENT_NOT_APPROVED` | Pembeli belum menyetujui | Selesaikan langkah 5 |
-| `409 CONFLICT` "needs review" | Ada payment `REVIEW`; order baru diblokir | Lihat `review_reason` di tabel `payments`, lalu coba capture ulang dengan `orderId` lama |
+| `409 CONFLICT` "needs review" | Ada payment `REVIEW` dan order di PayPal belum `COMPLETED`, atau PayPal tidak terbaca; order baru diblokir | Lihat `review_reason` di tabel `payments`, lalu coba capture ulang dengan `orderId` lama |
 | `500 INTERNAL_ERROR` | Database tidak terjangkau, atau migrasi belum diterapkan | Lihat log server. Jangan membuat order baru sebelum status order di PayPal dipastikan |
 | `401 UNAUTHORIZED` di langkah 1–2 | Cookie kosong atau kedaluwarsa | Ulangi langkah 0 |
 
 ## Yang tidak dicakup panduan ini
 
+- Webhook nyata, karena butuh URL publik yang terdaftar di PayPal. Verifikasi tanda tangan dan rekonsiliasinya diuji dengan mock.
 - Status `REVIEW` dan kegagalan database tidak bisa dipicu dengan aman lewat alur nyata. Keduanya diuji di `payment-flow.test.ts` dan `service.test.ts`.
 - Invarian PostgreSQL (index unik, capture bersamaan) diuji lewat `npm run test:integration`; lihat [`api.md`](api.md#pengujian-integrasi-postgresql).

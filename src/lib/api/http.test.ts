@@ -51,6 +51,45 @@ describe("parseJsonBody + withApiErrors", () => {
     expect(body.error.code).toBe("PAYLOAD_TOO_LARGE");
   });
 
+  it("stops reading a chunked body with no Content-Length as soon as it passes the limit", async () => {
+    const chunk = new Uint8Array(16 * 1024).fill(0x78);
+    let pulled = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = new Request("https://example.test/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+
+    const { status, body } = await readError(await handler(request));
+
+    expect(status).toBe(413);
+    expect(body.error.code).toBe("PAYLOAD_TOO_LARGE");
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(10);
+  });
+
+  it("decodes a multi-byte character split across chunks", async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ name: "José" }));
+    const split = bytes.indexOf(0xc3) + 1;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, split));
+        controller.enqueue(bytes.slice(split));
+        controller.close();
+      },
+    });
+    const request = new Request("https://example.test/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+
+    const response = await handler(request);
+    expect(await response.json()).toEqual({ data: { name: "José" } });
+  });
+
   it("passes ApiError status and code through", async () => {
     const failing = withApiErrors(async () => {
       throw new ApiError("CONFLICT", "Proposal is already paid");

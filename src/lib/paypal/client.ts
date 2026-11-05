@@ -27,7 +27,7 @@ export type PaypalOrder = {
     amount?: PaypalAmount;
     payments?: { captures?: PaypalCapture[] };
   }>;
-  payer?: { payer_id?: string; email_address?: string };
+  payer?: { payer_id?: string };
   links?: Array<{ href: string; rel: string; method?: string }>;
 };
 
@@ -109,7 +109,8 @@ function parseTokenResponse(json: unknown): OAuthToken {
 
 async function getAccessToken(fetchImpl: typeof fetch) {
   const config = getPaypalConfig();
-  const key = `${config.environment}:${config.clientId}`;
+  // The secret is part of the key so rotated credentials never reuse an old token.
+  const key = `${config.environment}:${config.clientId}:${config.clientSecret}`;
 
   if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
     return { token: cachedToken.value, baseUrl: config.baseUrl };
@@ -188,10 +189,30 @@ async function withRetry<T>(retry: boolean, attempt: () => Promise<T>): Promise<
 async function request<T>(
   method: "GET" | "POST",
   path: string,
-  options: { body?: unknown; requestId?: string; retry: boolean },
+  options: { body?: unknown; rawBody?: string; requestId?: string; retry: boolean },
   fetchImpl: typeof fetch = fetch,
 ): Promise<T> {
   const { token, baseUrl } = await getAccessToken(fetchImpl);
+  try {
+    return await send<T>(method, path, options, token, baseUrl, fetchImpl);
+  } catch (error) {
+    if (!(error instanceof PaypalApiError && error.status === 401)) throw error;
+    // PayPal rejected the token before processing the request, so one attempt
+    // with a fresh token is safe, including for a capture.
+    if (cachedToken?.value === token) cachedToken = undefined;
+    const fresh = await getAccessToken(fetchImpl);
+    return send<T>(method, path, options, fresh.token, fresh.baseUrl, fetchImpl);
+  }
+}
+
+function send<T>(
+  method: "GET" | "POST",
+  path: string,
+  options: { body?: unknown; rawBody?: string; requestId?: string; retry: boolean },
+  token: string,
+  baseUrl: string,
+  fetchImpl: typeof fetch,
+): Promise<T> {
   return withRetry(options.retry, async () => {
     const response = await fetchImpl(`${baseUrl}${path}`, {
       method,
@@ -201,7 +222,7 @@ async function request<T>(
         prefer: "return=representation",
         ...(options.requestId ? { "paypal-request-id": options.requestId } : {}),
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
       cache: "no-store",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -276,4 +297,33 @@ export function formatAmount(cents: number) {
     throw new RangeError("PayPal amount must be a non-negative safe integer in cents");
   }
   return `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+}
+
+export type WebhookSignature = {
+  authAlgo: string;
+  certUrl: string;
+  transmissionId: string;
+  transmissionSig: string;
+  transmissionTime: string;
+  webhookId: string;
+};
+
+// PayPal requires webhook_event to be posted back exactly as received, so the
+// raw text is embedded rather than parsed and re-serialized.
+export async function verifyWebhookSignature(signature: WebhookSignature, rawEvent: string, fetchImpl?: typeof fetch) {
+  const fields = JSON.stringify({
+    auth_algo: signature.authAlgo,
+    cert_url: signature.certUrl,
+    transmission_id: signature.transmissionId,
+    transmission_sig: signature.transmissionSig,
+    transmission_time: signature.transmissionTime,
+    webhook_id: signature.webhookId,
+  });
+  const result = await request<{ verification_status?: string }>(
+    "POST",
+    "/v1/notifications/verify-webhook-signature",
+    { rawBody: `${fields.slice(0, -1)},"webhook_event":${rawEvent}}`, retry: true },
+    fetchImpl,
+  );
+  return result.verification_status === "SUCCESS";
 }

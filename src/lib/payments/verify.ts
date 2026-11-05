@@ -12,7 +12,7 @@ export type ExpectedPayment = {
 };
 
 export type VerificationResult =
-  | { kind: "completed"; capture: PaypalCapture; payerId: string | null; payerEmail: string | null }
+  | { kind: "completed"; capture: PaypalCapture; payerId: string | null }
   | { kind: "pending"; capture: PaypalCapture | null }
   | { kind: "declined"; capture: PaypalCapture }
   | { kind: "unexpected"; capture: PaypalCapture | null; reason: string }
@@ -120,7 +120,6 @@ export function verifyPaypalOrder(order: PaypalOrder, expected: ExpectedPayment)
       kind: "completed",
       capture,
       payerId: order.payer?.payer_id ?? null,
-      payerEmail: order.payer?.email_address ?? null,
     };
   }
 

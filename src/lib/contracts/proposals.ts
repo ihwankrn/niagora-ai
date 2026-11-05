@@ -32,6 +32,8 @@ export const proposalSchema = quoteSchema.extend({
   paidAt: isoDateTimeSchema.nullable(),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
+  // Only on GET /api/proposals/:id: a payment for it needs manual reconciliation.
+  paymentUnderReview: z.boolean().optional(),
 });
 export type Proposal = z.infer<typeof proposalSchema>;
 

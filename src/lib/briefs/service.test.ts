@@ -4,6 +4,8 @@ import { ApiError } from "@/lib/api/http";
 
 const db = vi.hoisted(() => ({
   brief: { count: vi.fn(), create: vi.fn(), update: vi.fn() },
+  $transaction: vi.fn(),
+  $queryRaw: vi.fn(),
 }));
 const ai = vi.hoisted(() => ({ analyzeBrief: vi.fn() }));
 
@@ -24,6 +26,8 @@ const analysis = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.$transaction.mockImplementation(async (callback: (tx: typeof db) => unknown) => callback(db));
+  db.$queryRaw.mockResolvedValue([]);
   db.brief.count.mockResolvedValue(0);
   db.brief.create.mockResolvedValue({ id: "33333333-3333-4333-8333-333333333333", createdAt });
   db.brief.update.mockResolvedValue({});
@@ -70,5 +74,14 @@ describe("analyzeAndStoreBrief", () => {
     });
     expect(ai.analyzeBrief).not.toHaveBeenCalled();
     expect(db.brief.create).not.toHaveBeenCalled();
+  });
+
+  it("takes the user row lock before counting", async () => {
+    ai.analyzeBrief.mockResolvedValue({ analysis, totalEstimatedHours: 10, model: "claude-opus-5-5" });
+
+    await analyzeAndStoreBrief(user, input);
+
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(db.brief.count.mock.invocationCallOrder[0]);
+    expect(db.brief.count.mock.invocationCallOrder[0]).toBeLessThan(db.brief.create.mock.invocationCallOrder[0]);
   });
 });

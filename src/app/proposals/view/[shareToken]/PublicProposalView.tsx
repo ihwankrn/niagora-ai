@@ -3,20 +3,11 @@
 import { useState } from "react";
 
 import type { PublicProposalApiResponse } from "@/lib/contracts/public-proposals";
-import type { Currency } from "@/lib/contracts/common";
 import type { ProposalStatus } from "@/lib/contracts/proposals";
+import { formatCents } from "@/types/proposals";
 
 import PublicProposalPayment from "./PublicProposalPayment";
 import PublicProposalFrame from "./PublicProposalFrame";
-
-function formatCurrency(cents: number, currency: Currency): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(cents / 100);
-}
 
 function getStatusBadge(status: ProposalStatus) {
   switch (status) {
@@ -148,14 +139,14 @@ export default function PublicProposalView({
                               <p className="text-[11px] text-slate-500">{item.description}</p>
                             ) : null}
                             <p className="text-[11px] text-slate-500">
-                              {formatCurrency(item.hourlyRateCents, data.currency)} / hour
+                              {formatCents(item.hourlyRateCents, data.currency)} / hour
                             </p>
                           </td>
                           <td className="px-4 py-3.5 text-right font-medium whitespace-nowrap text-slate-700">
                             {item.estimatedHours} hrs
                           </td>
                           <td className="px-4 py-3.5 text-right font-bold whitespace-nowrap text-slate-900">
-                            {formatCurrency(item.amountCents, data.currency)}
+                            {formatCents(item.amountCents, data.currency)}
                           </td>
                         </tr>
                       ))
@@ -192,7 +183,7 @@ export default function PublicProposalView({
               <div className="flex items-center justify-between text-slate-600">
                 <span>Subtotal:</span>
                 <span className="font-semibold text-slate-800">
-                  {formatCurrency(data.subtotalCents, data.currency)}
+                  {formatCents(data.subtotalCents, data.currency)}
                 </span>
               </div>
               <div className="flex items-center justify-between border-t border-indigo-100 pt-2">
@@ -201,7 +192,7 @@ export default function PublicProposalView({
                   <span className="text-[11px] text-slate-500">Exact amount payable upon acceptance</span>
                 </div>
                 <span className="text-2xl font-extrabold tracking-tight text-indigo-700 sm:text-3xl">
-                  {formatCurrency(data.totalCents, data.currency)}
+                  {formatCents(data.totalCents, data.currency)}
                 </span>
               </div>
             </div>

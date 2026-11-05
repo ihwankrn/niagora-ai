@@ -1,11 +1,14 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import { ApiError } from "@/lib/api/http";
 import { displayNameFromMetadata } from "@/lib/auth/display-name";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
 
 export type AuthUser = {
   id: string; // Supabase Auth user id (JWT "sub"), equals users.id
@@ -57,10 +60,28 @@ export async function requireUser(): Promise<AuthUser> {
 // Keeps a users row for every authenticated Supabase user.
 export async function ensureUserRecord(user: AuthUser) {
   const displayName = user.displayName ?? null;
-  await prisma.user.upsert({
-    where: { id: user.id },
-    create: { id: user.id, email: user.email, displayName },
-    // Only overwrite the stored name when the session carries one.
-    update: { email: user.email, ...(displayName ? { displayName } : {}) },
-  });
+  const upsert = (client: Pick<Prisma.TransactionClient, "user">) =>
+    client.user.upsert({
+      where: { id: user.id },
+      create: { id: user.id, email: user.email, displayName },
+      // Only overwrite the stored name when the session carries one.
+      update: { email: user.email, ...(displayName ? { displayName } : {}) },
+    });
+
+  try {
+    await upsert(prisma);
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
+    // Another row holds this email, for example an account re-created in Supabase
+    // under a new id. Supabase has just verified the email for this user, so the
+    // old row gives it up but keeps its id and data. A concurrent first request
+    // for the same user lands here too, and the upsert then simply updates.
+    await prisma.$transaction(async (tx) => {
+      await tx.user.updateMany({
+        where: { email: user.email, id: { not: user.id } },
+        data: { email: `released-${randomUUID()}@users.invalid` },
+      });
+      await upsert(tx);
+    });
+  }
 }

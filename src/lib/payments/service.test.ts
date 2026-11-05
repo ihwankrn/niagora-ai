@@ -304,10 +304,58 @@ describe("createPaypalOrder", () => {
 
   it("refuses to replace a payment already in review", async () => {
     db.proposal.findUnique.mockResolvedValue(proposal("APPROVED"));
-    db.payment.findFirst.mockResolvedValue({ id: PAYMENT_ID });
+    db.payment.findFirst.mockResolvedValue({ paypalOrderId: ORDER_ID });
+    paypal.getOrder.mockResolvedValue(paypalOrder("APPROVED", null));
 
     await expect(createPaypalOrder(TOKEN)).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(paypal.captureOrder).not.toHaveBeenCalled();
     expect(paypal.createOrder).not.toHaveBeenCalled();
+  });
+
+  it("resolves a REVIEW payment from a completed PayPal order without sending a capture", async () => {
+    db.proposal.findUnique.mockResolvedValue(proposal("APPROVED"));
+    db.payment.findFirst
+      .mockResolvedValueOnce({ paypalOrderId: ORDER_ID })
+      .mockResolvedValueOnce(payment("REVIEW", { reviewReason: "previous mismatch" }));
+    paypal.getOrder.mockResolvedValue(paypalOrder());
+    db.$transaction.mockImplementation(async (callback: (tx: typeof db) => unknown) => callback(db));
+    db.payment.updateMany.mockResolvedValue({ count: 1 });
+    db.proposal.updateMany.mockResolvedValue({ count: 1 });
+    db.payment.findUniqueOrThrow.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1" }));
+
+    await expect(createPaypalOrder(TOKEN)).rejects.toMatchObject({ code: "CONFLICT", message: "This proposal is already paid" });
+
+    expect(paypal.captureOrder).not.toHaveBeenCalled();
+    expect(paypal.createOrder).not.toHaveBeenCalled();
+    expect(db.proposal.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }));
+  });
+});
+
+describe("payment data minimization", () => {
+  it("stores no payer email, name, address or funding details", async () => {
+    db.proposal.findUnique.mockResolvedValue(proposal("APPROVED"));
+    db.payment.findFirst.mockResolvedValue(payment("APPROVED"));
+    paypal.getOrder.mockResolvedValue({
+      ...paypalOrder(),
+      payer: { payer_id: "PAYER1", email_address: "payer@example.com", name: { given_name: "Rahasia" } },
+      payment_source: { paypal: { email_address: "payer@example.com", account_id: "PAYER1" } },
+      purchase_units: paypalOrder().purchase_units.map((unit) => ({
+        ...unit,
+        shipping: { name: { full_name: "Rahasia" }, address: { address_line_1: "Jalan Rahasia" } },
+      })),
+    });
+    db.$transaction.mockImplementation(async (callback: (tx: typeof db) => unknown) => callback(db));
+    db.payment.updateMany.mockResolvedValue({ count: 1 });
+    db.proposal.updateMany.mockResolvedValue({ count: 1 });
+    db.payment.findUniqueOrThrow.mockResolvedValue(payment("COMPLETED", { paypalCaptureId: "CAP1" }));
+
+    await capturePaypalOrder(TOKEN, ORDER_ID);
+
+    const { data } = db.payment.updateMany.mock.calls[0][0];
+    expect(data).toMatchObject({ status: "COMPLETED", payerId: "PAYER1" });
+    expect(data).not.toHaveProperty("payerEmail");
+    expect(JSON.stringify(data.providerPayload)).not.toMatch(/payer@example\.com|Rahasia|payment_source/);
+    expect(data.providerPayload).toMatchObject({ id: ORDER_ID, status: "COMPLETED" });
   });
 });
 

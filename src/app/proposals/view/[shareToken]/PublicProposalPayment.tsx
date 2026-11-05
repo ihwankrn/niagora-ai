@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Currency } from "@/lib/contracts/common";
 import type { ProposalStatus } from "@/lib/contracts/proposals";
+import { formatCents } from "@/types/proposals";
 import {
   approvePublicProposal,
   capturePublicProposalPaypalOrder,
@@ -37,15 +38,6 @@ declare global {
 }
 
 type CaptureState = "capturing" | "retry" | "pending";
-
-function formatCurrency(cents: number, currency: Currency) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(cents / 100);
-}
 
 export default function PublicProposalPayment({
   token,
@@ -282,7 +274,7 @@ export default function PublicProposalPayment({
           Persetujuan & Pembayaran
         </h2>
         <p className="mt-1 text-xs text-slate-600">
-          Total pembayaran: <strong>{formatCurrency(totalCents, currency)}</strong>
+          Total pembayaran: <strong>{formatCents(totalCents, currency)}</strong>
         </p>
       </div>
 

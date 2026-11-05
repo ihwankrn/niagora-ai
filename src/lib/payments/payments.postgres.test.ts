@@ -109,7 +109,7 @@ if (testDbUrl) {
 
 const integrationEnabled = Boolean(testDbUrl);
 
-// src/lib/db.ts reads DATABASE_URL at import time. Point it at the dedicated
+// src/lib/db.ts reads DATABASE_URL on first use. Point it at the dedicated
 // test database only after the guard above has accepted it.
 if (integrationEnabled) {
   process.env.DATABASE_URL = testDbUrl;
@@ -506,6 +506,44 @@ describePg("PostgreSQL payment invariants", () => {
     });
   });
 
+  describe("user and brief invariants", () => {
+    const user = { id: USER_ID, email: "limit@example.test" };
+    const input = { brief: "I need a 5 page company profile website.", serviceType: "web_development" as const };
+
+    it("never lets concurrent requests pass the hourly brief limit", async () => {
+      const { createBriefWithinLimit, MAX_ANALYSES_PER_HOUR } = await import("@/lib/briefs/service");
+
+      const results = await Promise.allSettled(Array.from({ length: 40 }, () => createBriefWithinLimit(user, input)));
+
+      const { rows } = await pool.query<{ count: string }>("SELECT count(*) FROM briefs WHERE user_id = $1", [USER_ID]);
+      expect(Number(rows[0].count)).toBe(MAX_ANALYSES_PER_HOUR);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(MAX_ANALYSES_PER_HOUR);
+    });
+
+    it("gives the email to a re-created Supabase user and keeps the old row and its data", async () => {
+      const { ensureUserRecord } = await import("@/lib/auth/session");
+      const email = `recreated-${randomUUID()}@example.test`;
+      const newId = randomUUID();
+      await pool.query("UPDATE users SET email = $1 WHERE id = $2", [email, USER_ID]);
+
+      await ensureUserRecord({ id: newId, email });
+
+      const { rows } = await pool.query<{ id: string; email: string }>("SELECT id, email FROM users WHERE id = ANY($1::uuid[])", [[USER_ID, newId]]);
+      expect(rows.find((row) => row.id === newId)?.email).toBe(email);
+      expect(rows.find((row) => row.id === USER_ID)?.email).toMatch(/@users\.invalid$/);
+    });
+
+    it("survives concurrent first requests from one new user", async () => {
+      const { ensureUserRecord } = await import("@/lib/auth/session");
+      const fresh = { id: randomUUID(), email: `first-${randomUUID()}@example.test` };
+
+      await expect(Promise.all(Array.from({ length: 5 }, () => ensureUserRecord(fresh)))).resolves.toBeDefined();
+
+      const { rows } = await pool.query("SELECT id FROM users WHERE id = $1", [fresh.id]);
+      expect(rows).toHaveLength(1);
+    });
+  });
+
   describe("service-level reconciliation", () => {
     function completedOrder(orderId: string, proposalId: string, paymentId: string, captureId: string) {
       return {
@@ -560,6 +598,40 @@ describePg("PostgreSQL payment invariants", () => {
       expect(payment.paypal_capture_id).toBe(captureId);
       expect(proposal.status).toBe("PAID");
       expect(await countCompletedPayments(proposalId)).toBe(1);
+
+      const { rows } = await pool.query("SELECT payer_id, payer_email, provider_payload FROM payments WHERE id = $1", [paymentId]);
+      expect(rows[0].payer_id).toBe("PAYER-INTEGRATION");
+      expect(rows[0].payer_email).toBeNull();
+      expect(JSON.stringify(rows[0].provider_payload)).not.toContain("payer@example.test");
+    });
+
+    it("records a capture from a verified webhook without sending a capture", async () => {
+      const { id: proposalId } = await createProposal("APPROVED");
+      const orderId = `ORDER-${randomUUID()}`;
+      const paymentId = await createPayment(proposalId, { status: "CREATED", orderId });
+      paypal.getOrder.mockResolvedValue(completedOrder(orderId, proposalId, paymentId, `CAP-${randomUUID()}`));
+
+      await service.reconcileCapturedOrder(orderId);
+      await service.reconcileCapturedOrder(orderId);
+
+      expect((await paymentRow(paymentId)).status).toBe("COMPLETED");
+      expect((await proposalRow(proposalId)).status).toBe("PAID");
+      expect(await countCompletedPayments(proposalId)).toBe(1);
+      expect(paypal.captureOrder).not.toHaveBeenCalled();
+    });
+
+    it("resolves a REVIEW payment on an order request once PayPal shows it completed", async () => {
+      const { id: proposalId, shareToken } = await createProposal("APPROVED");
+      const orderId = `ORDER-${randomUUID()}`;
+      const paymentId = await createPayment(proposalId, { status: "REVIEW", orderId });
+      paypal.getOrder.mockResolvedValue(completedOrder(orderId, proposalId, paymentId, `CAP-${randomUUID()}`));
+
+      await expect(service.createPaypalOrder(shareToken)).rejects.toMatchObject({ code: "CONFLICT", message: "This proposal is already paid" });
+
+      expect((await paymentRow(paymentId)).status).toBe("COMPLETED");
+      expect((await proposalRow(proposalId)).status).toBe("PAID");
+      expect(paypal.captureOrder).not.toHaveBeenCalled();
+      expect(paypal.createOrder).not.toHaveBeenCalled();
     });
 
     it("does not downgrade a COMPLETED payment when the proposal is inconsistent", async () => {

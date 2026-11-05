@@ -3,12 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import { ProposalDetailError } from "@/lib/proposals/detail-client";
 import { proposalDetail } from "@/lib/proposals/detail-fixtures.test-data";
+import { formatCents } from "@/types/proposals";
 
 import ProposalDetailModal, { ProposalDetailContent, type ProposalDetailState } from "./ProposalDetailModal";
 
 const noop = () => {};
 const render = (state: ProposalDetailState) => renderToStaticMarkup(<ProposalDetailContent state={state} onRetry={noop} />);
-const usd = (amount: string) => new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(Number(amount));
+const usd = (amount: string) => formatCents(Number(amount) * 100, "USD");
 
 describe("ProposalDetailContent", () => {
   it("shows a loading state", () => {
@@ -57,7 +58,7 @@ describe("ProposalDetailContent", () => {
   it("uses the proposal currency for every amount", () => {
     const eur = { ...proposalDetail, currency: "EUR" as const };
     const html = render({ status: "ready", proposal: eur });
-    expect(html).toContain(new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR", minimumFractionDigits: 2 }).format(650));
+    expect(html).toContain(formatCents(65_000, "EUR"));
     expect(html).not.toContain(usd("650"));
   });
 

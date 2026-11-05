@@ -167,8 +167,24 @@ function reviewCapture(order: PaypalOrder | undefined) {
   return captures.find((capture) => capture.status === "COMPLETED") ?? captures[0] ?? null;
 }
 
+// Keeps only what reconciliation needs. An allowlist, so payer name, email,
+// address and funding details are never stored, whatever PayPal adds later.
 function providerPayload(order: PaypalOrder) {
-  return order as unknown as Prisma.InputJsonValue;
+  const minimized = {
+    id: order.id,
+    intent: order.intent,
+    status: order.status,
+    purchase_units: order.purchase_units?.map((unit) => ({
+      reference_id: unit.reference_id,
+      custom_id: unit.custom_id,
+      invoice_id: unit.invoice_id,
+      amount: unit.amount,
+      payments: {
+        captures: unit.payments?.captures?.map(({ id, status, amount }) => ({ id, status, amount })),
+      },
+    })),
+  };
+  return JSON.parse(JSON.stringify(minimized)) as Prisma.InputJsonValue;
 }
 
 async function markPaymentForReview(
@@ -484,6 +500,20 @@ async function recordExistingCapture(token: string, orderId: string): Promise<ne
   );
 }
 
+// Reading the order moves no money. Only a COMPLETED order goes on to the capture
+// flow, which sends no capture for it; any other state stays in REVIEW.
+async function reconcileReviewPayment(token: string, orderId: string): Promise<never> {
+  let order: PaypalOrder;
+  try {
+    order = await paypal.getOrder(orderId);
+  } catch (error) {
+    logProviderFailure(error);
+    throw reviewConflictError();
+  }
+  if (order.status === "COMPLETED") return recordExistingCapture(token, orderId);
+  throw reviewConflictError();
+}
+
 async function reuseOpenPayment(
   token: string,
   payment: PaymentForPaymentFlow,
@@ -645,9 +675,9 @@ export async function createPaypalOrder(token: string): Promise<CreatePaypalOrde
   // A captured-but-unreconciled payment must never be replaced by a new order.
   const review = await prisma.payment.findFirst({
     where: { proposalId: proposal.id, status: "REVIEW" },
-    select: { id: true },
+    select: { paypalOrderId: true },
   });
-  if (review) throw reviewConflictError();
+  if (review) return reconcileReviewPayment(token, review.paypalOrderId);
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const open = await prisma.payment.findFirst({
@@ -822,7 +852,6 @@ async function completePayment(
           status: "COMPLETED",
           paypalCaptureId: result.capture.id,
           payerId: result.payerId,
-          payerEmail: result.payerEmail,
           providerPayload: payload,
           reviewReason: null,
           verifiedAt: paidAt,
@@ -1019,4 +1048,57 @@ export async function capturePaypalOrder(token: string, orderId: string): Promis
   }
 
   return completePayment(payment, proposal, order, result);
+}
+
+// Rejects anything PayPal does not confirm as its own webhook delivery. Without
+// a configured webhook id no event can be verified, so none is trusted.
+export async function assertAuthenticPaypalWebhook(headers: Headers, rawEvent: string) {
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID?.trim();
+  if (!webhookId) {
+    console.error("PAYPAL_WEBHOOK_ID is not set; rejecting PayPal webhook");
+    throw new ApiError("PAYMENT_PROVIDER_ERROR", "PayPal webhooks are not configured.");
+  }
+
+  const authAlgo = headers.get("paypal-auth-algo");
+  const certUrl = headers.get("paypal-cert-url");
+  const transmissionId = headers.get("paypal-transmission-id");
+  const transmissionSig = headers.get("paypal-transmission-sig");
+  const transmissionTime = headers.get("paypal-transmission-time");
+  if (!authAlgo || !certUrl || !transmissionId || !transmissionSig || !transmissionTime) {
+    throw new ApiError("UNAUTHORIZED", "Invalid webhook signature");
+  }
+
+  let verified: boolean;
+  try {
+    verified = await paypal.verifyWebhookSignature(
+      { authAlgo, certUrl, transmissionId, transmissionSig, transmissionTime, webhookId },
+      rawEvent,
+    );
+  } catch (error) {
+    providerError(error);
+  }
+  if (!verified) throw new ApiError("UNAUTHORIZED", "Invalid webhook signature");
+}
+
+// Records a capture whose browser never reported back, for example because the
+// tab closed. It only reconciles: a webhook never triggers a capture, so an order
+// PayPal does not show as COMPLETED is answered with an error and PayPal retries.
+export async function reconcileCapturedOrder(orderId: string) {
+  const payment = await prisma.payment.findFirst({
+    where: { paypalOrderId: orderId },
+    select: { proposal: { select: { shareToken: true } } },
+  });
+  // Not an order from this app, so there is nothing to record or retry.
+  if (!payment) return;
+
+  let order: PaypalOrder;
+  try {
+    order = await paypal.getOrder(orderId);
+  } catch (error) {
+    providerError(error);
+  }
+  if (order.status !== "COMPLETED") {
+    throw new ApiError("PAYMENT_PROVIDER_ERROR", "The order is not completed yet.");
+  }
+  await capturePaypalOrder(payment.proposal.shareToken, orderId);
 }

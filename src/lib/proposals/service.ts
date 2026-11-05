@@ -116,11 +116,14 @@ export async function createProposal(user: AuthUser, input: CreateProposalReques
 // Read-only: viewing a proposal never changes its status or updatedAt.
 export async function getProposalForUser(user: AuthUser, proposalId: string): Promise<Proposal> {
   // Same 404 whether the proposal is missing or owned by someone else.
-  const record = await prisma.proposal.findFirst({ where: { id: proposalId, userId: user.id }, ...proposalWithItems });
+  const record = await prisma.proposal.findFirst({
+    where: { id: proposalId, userId: user.id },
+    include: { ...proposalWithItems.include, payments: { where: { status: "REVIEW" }, select: { id: true }, take: 1 } },
+  });
   if (!record) {
     throw new ApiError("NOT_FOUND", "Proposal not found");
   }
-  return toProposal(record);
+  return { ...toProposal(record), paymentUnderReview: record.payments.length > 0 };
 }
 
 export async function getDashboardStats(userId: string): Promise<DashboardStats> {

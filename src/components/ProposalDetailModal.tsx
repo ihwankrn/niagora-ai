@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Currency, ProposalStatus, ProposalSummary, Proposal } from "@/types/proposals";
+import { formatCents, type ProposalStatus, type ProposalSummary, type Proposal } from "@/types/proposals";
 import { sendProposalResponseSchema, type SendProposalResponse } from "@/lib/contracts/payments";
 import { fetchProposalDetail, ProposalDetailError } from "@/lib/proposals/detail-client";
 import Spinner from "@/components/Spinner";
@@ -26,15 +26,6 @@ export type ProposalDetailState =
   | { status: "loading" }
   | { status: "error"; error: ProposalDetailError }
   | { status: "ready"; proposal: Proposal };
-
-function formatCents(cents: number, currency: Currency): string {
-  const formatter = new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-  });
-  return formatter.format(cents / 100);
-}
 
 function formatDate(isoString: string): string {
   return new Date(isoString).toLocaleDateString(undefined, {
@@ -119,6 +110,17 @@ export function ProposalDetailContent({ state, onRetry }: ProposalDetailContentP
   const { proposal } = state;
   return (
     <div className="space-y-4" data-testid="proposal-detail">
+      {proposal.paymentUnderReview && (
+        <p
+          role="alert"
+          data-testid="proposal-payment-review"
+          className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-medium text-amber-900"
+        >
+          A payment for this proposal needs review. Check the transaction in your PayPal dashboard before asking the
+          client to pay again.
+        </p>
+      )}
+
       {/* Pricing Summary Grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 rounded-xl border border-slate-200/90 bg-slate-50/70 p-4 text-xs">
         <div>

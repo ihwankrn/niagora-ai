@@ -115,14 +115,26 @@ beforeEach(() => {
 });
 
 describe("POST .../paypal/orders", () => {
-  it("answers 409 and never calls PayPal while a payment is in REVIEW", async () => {
-    db.payment.findFirst.mockResolvedValue({ id: PAYMENT_ID });
+  it("answers 409 without moving money while a payment is in REVIEW and PayPal shows no completed order", async () => {
+    db.payment.findFirst.mockResolvedValue({ paypalOrderId: ORDER_ID });
+    paypal.getOrder.mockResolvedValue(paypalOrder("APPROVED"));
 
     await expectApiError(await callOrders(), 409, "CONFLICT");
 
+    expect(paypal.getOrder).toHaveBeenCalledWith(ORDER_ID);
+    expect(paypal.captureOrder).not.toHaveBeenCalled();
     expect(paypal.createOrder).not.toHaveBeenCalled();
-    expect(paypal.getOrder).not.toHaveBeenCalled();
     expect(db.payment.create).not.toHaveBeenCalled();
+  });
+
+  it("still answers 409 for a REVIEW payment when PayPal cannot be read", async () => {
+    db.payment.findFirst.mockResolvedValue({ paypalOrderId: ORDER_ID });
+    paypal.getOrder.mockRejectedValue(new Error("network down"));
+
+    await expectApiError(await callOrders(), 409, "CONFLICT");
+
+    expect(paypal.captureOrder).not.toHaveBeenCalled();
+    expect(paypal.createOrder).not.toHaveBeenCalled();
   });
 
   it("answers 409 when the database index rejects the new row and the winner is in REVIEW", async () => {

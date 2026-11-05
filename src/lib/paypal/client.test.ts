@@ -3,7 +3,16 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { captureOrder, createOrder, formatAmount, getOrder, getPaypalConfig, PaypalApiError, resetPaypalTokenCache } from "./client";
+import {
+  captureOrder,
+  createOrder,
+  formatAmount,
+  getOrder,
+  getPaypalConfig,
+  PaypalApiError,
+  resetPaypalTokenCache,
+  verifyWebhookSignature,
+} from "./client";
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -227,6 +236,76 @@ describe("token handling", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe("rejected access tokens", () => {
+  const order = { id: "O1", status: "COMPLETED" };
+  const rejected = () => json(401, { name: "AUTHENTICATION_FAILURE" });
+
+  it("requests a fresh token once after a 401 and keeps using it", async () => {
+    const fetchImpl = fakeFetch(token(), json(200, order), rejected(), token(), json(200, order), json(200, order));
+
+    await getOrder("O1", fetchImpl);
+    await expect(getOrder("O1", fetchImpl)).resolves.toEqual(order);
+    await getOrder("O1", fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("sends a capture again with the same request id after a 401, which PayPal rejects unprocessed", async () => {
+    const fetchImpl = fakeFetch(token(), rejected(), token(), json(201, order));
+
+    await expect(captureOrder("O1", "req-capture", fetchImpl)).resolves.toEqual(order);
+
+    const headers = [1, 3].map((call) => new Headers(fetchImpl.mock.calls[call][1]?.headers).get("PayPal-Request-Id"));
+    expect(headers).toEqual(["req-capture", "req-capture"]);
+  });
+
+  it("does not loop when the fresh token is rejected too", async () => {
+    const fetchImpl = fakeFetch(token(), rejected(), token(), rejected());
+
+    await expect(getOrder("O1", fetchImpl)).rejects.toMatchObject({ status: 401 });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not reuse a cached token after the client secret changes", async () => {
+    const fetchImpl = fakeFetch(token(), json(200, order), token(), json(200, order));
+
+    await getOrder("O1", fetchImpl);
+    vi.stubEnv("PAYPAL_CLIENT_SECRET", "rotated-secret");
+    await getOrder("O1", fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("verifyWebhookSignature", () => {
+  const signature = {
+    authAlgo: "SHA256withRSA",
+    certUrl: "https://api.sandbox.paypal.com/cert",
+    transmissionId: "tx-1",
+    transmissionSig: "sig",
+    transmissionTime: "2026-11-05T12:00:00Z",
+    webhookId: "WH-1",
+  };
+
+  it("posts the event back byte for byte and accepts only SUCCESS", async () => {
+    const rawEvent = '{"id":"WH-EVENT",  "amount":1.10,"event_type":"X"}';
+    const fetchImpl = fakeFetch(token(), json(200, { verification_status: "SUCCESS" }));
+
+    await expect(verifyWebhookSignature(signature, rawEvent, fetchImpl)).resolves.toBe(true);
+
+    const [url, init] = fetchImpl.mock.calls[1];
+    expect(String(url)).toBe("https://api-m.sandbox.paypal.com/v1/notifications/verify-webhook-signature");
+    const body = String(init?.body);
+    expect(body).toContain(`"webhook_event":${rawEvent}}`);
+    expect(JSON.parse(body)).toMatchObject({ auth_algo: "SHA256withRSA", webhook_id: "WH-1", transmission_id: "tx-1" });
+  });
+
+  it("rejects FAILURE", async () => {
+    const fetchImpl = fakeFetch(token(), json(200, { verification_status: "FAILURE" }));
+    await expect(verifyWebhookSignature(signature, "{}", fetchImpl)).resolves.toBe(false);
   });
 });
 

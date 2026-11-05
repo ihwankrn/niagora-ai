@@ -10,7 +10,7 @@ import type { Proposal, CreateProposalRequest, ListProposalsResponse } from "@/l
 import type { ApiErrorBody } from "@/lib/contracts/errors";
 ```
 
-Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipanggil):
+Status implementasi:
 
 | Endpoint | Kontrak | Implementasi |
 |---|---|---|
@@ -24,6 +24,7 @@ Status implementasi (route handler belum ada; endpoint di bawah belum bisa dipan
 | `POST /api/public/proposals/:token/approve` | 🆕 perlu review FE | Unit-tested |
 | `POST /api/public/proposals/:token/paypal/orders` | 🆕 perlu review FE | Unit-tested; belum diuji ke PayPal Sandbox |
 | `POST /api/public/proposals/:token/paypal/capture` | 🆕 perlu review FE | Unit-tested; belum diuji ke PayPal Sandbox |
+| `POST /api/paypal/webhook` | Dipanggil PayPal, bukan Frontend | Unit-tested, rekonsiliasi diuji ke PostgreSQL; belum menerima event nyata dari PayPal |
 
 ## Aturan umum
 
@@ -272,7 +273,7 @@ Item, nominal, dan total disimpan dari hasil quote engine server, lalu dibaca ke
 Detail lengkap satu proposal untuk freelancer pemiliknya (dipakai `ProposalDetailModal`). Wajib login; respons `Cache-Control: private, no-store`.
 
 - Respons `200`: `{ "data": Proposal }` — bentuk yang sama persis dengan respons `201` `POST /api/proposals` (item, jam, tarif, `subtotalCents`, `totalCents`, `currency`, `status`, tanggal).
-- Tidak memuat `shareToken`, `userId`, atau data pembayaran (order/capture/payer).
+- Tidak memuat `shareToken`, `userId`, atau data pembayaran (order/capture/payer). Satu-satunya tambahan adalah `paymentUnderReview` (boolean): `true` jika ada pembayaran yang butuh rekonsiliasi manual.
 - Hanya membaca: membuka detail tidak mengubah `status` maupun `updatedAt`.
 - `401 UNAUTHORIZED` tanpa sesi. `404 NOT_FOUND` jika id tidak valid, proposal tidak ada, **atau milik user lain** — respons sama persis untuk ketiganya.
 
@@ -344,9 +345,12 @@ Aturan keamanan:
 - **Redirect/`onApprove` bukan bukti bayar.** Setelah capture, server mengambil ulang order dari PayPal dan mencocokkan order id, `reference_id` (= proposal), `custom_id` (= payment), mata uang, dan nominal order maupun capture. Hanya capture `COMPLETED` yang lolos verifikasi yang menandai proposal `paid`.
 - **Tidak ada capture ganda.** Capture memakai `PayPal-Request-Id` yang tetap per pembayaran; capture ulang untuk pembayaran yang sudah selesai langsung mengembalikan hasil tersimpan tanpa memanggil PayPal. Database hanya mengizinkan satu pembayaran terbuka (`CREATED`, `APPROVED`, atau `REVIEW`) dan satu pembayaran selesai per proposal.
 - **Rekonsiliasi setelah error jaringan.** Server selalu membaca order dari PayPal sebelum capture. Jika PayPal sudah meng-capture order (misalnya respons capture sebelumnya hilang), server memverifikasi dan mencatatnya **tanpa mengirim capture lagi**. Jadi setelah `502 PAYMENT_PROVIDER_ERROR`, Frontend aman memanggil endpoint capture lagi dengan `orderId` yang sama. Request capture ke PayPal tidak pernah di-retry otomatis; pembacaan order dan pembuatan order di-retry otomatis untuk error sementara.
-- **`REVIEW` memblokir order baru.** `PaymentStatus.REVIEW` berarti pembayaran butuh rekonsiliasi, misalnya PayPal sudah meng-capture tetapi hasilnya tidak aman diterapkan ke proposal. Selama ada pembayaran `REVIEW`, `POST .../paypal/orders` menjawab `409 CONFLICT` tanpa memanggil PayPal. Index unik parsial `payments_one_open_per_proposal` (`CREATED`, `APPROVED`, `REVIEW`) menjadi pengaman terakhir di database, sehingga klien tidak bisa tertagih dua kali lewat order kedua. Status ini internal dan tidak muncul di respons API.
-- **Keluar dari `REVIEW` hanya dengan bukti.** Capture ulang boleh mengubahnya menjadi `COMPLETED` jika capture terverifikasi dan proposal masih `approved`, atau menjadi `FAILED` jika PayPal menunjukkan capture ditolak atau gagal. Pembayaran `COMPLETED` tidak pernah diturunkan statusnya. Belum ada endpoint operator untuk menyelesaikan `REVIEW`, jadi kasus yang tidak selesai lewat capture ulang harus ditangani manual.
+- **`REVIEW` memblokir order baru.** `PaymentStatus.REVIEW` berarti pembayaran butuh rekonsiliasi, misalnya PayPal sudah meng-capture tetapi hasilnya tidak aman diterapkan ke proposal. Selama ada pembayaran `REVIEW`, `POST .../paypal/orders` tidak pernah membuat order baru: server hanya membaca order lama, mencatatnya jika PayPal menunjukkan `COMPLETED`, dan selain itu menjawab `409 CONFLICT`. Jalur ini tidak pernah mengirim capture. Index unik parsial `payments_one_open_per_proposal` (`CREATED`, `APPROVED`, `REVIEW`) menjadi pengaman terakhir di database, sehingga klien tidak bisa tertagih dua kali lewat order kedua. Nama status ini internal; klien tidak melihatnya, dan freelancer melihat `paymentUnderReview` di `GET /api/proposals/:id`.
+- **Keluar dari `REVIEW` hanya dengan bukti.** Capture ulang boleh mengubahnya menjadi `COMPLETED` jika capture terverifikasi dan proposal masih `approved`, atau menjadi `FAILED` jika PayPal menunjukkan capture ditolak atau gagal. Pembayaran `COMPLETED` tidak pernah diturunkan statusnya. Belum ada endpoint operator untuk menyelesaikan `REVIEW`, jadi kasus yang tidak selesai lewat capture ulang, request order, atau webhook harus ditangani manual.
 - Token di link klien adalah rahasia (32 byte acak). Token salah format atau tidak dikenal → `404`. Proposal `draft` tidak bisa dilihat klien.
+
+- **Webhook mencatat capture yang tidak dilaporkan browser.** `POST /api/paypal/webhook` memverifikasi tanda tangan lewat PayPal memakai `PAYPAL_WEBHOOK_ID`, lalu untuk `PAYMENT.CAPTURE.COMPLETED` membaca order dan mencatatnya lewat verifikasi yang sama. Webhook tidak pernah mengirim capture. Tanpa `PAYPAL_WEBHOOK_ID` semua event ditolak. Jawaban non-2xx membuat PayPal mengirim ulang event. Daftarkan URL publik `<APP_BASE_URL>/api/paypal/webhook` dengan event `PAYMENT.CAPTURE.COMPLETED` di Sandbox app; localhost tidak bisa menerima event.
+- **Data pembayar diminimalkan.** Pembayaran baru hanya menyimpan `payerId` dan ringkasan order (id, status, nominal, capture). Email, nama, alamat, dan sumber dana pembayar tidak disimpan. Baris lama tidak diubah otomatis.
 
 - **Hanya Sandbox.** Host PayPal Live tidak ada di kode. `PAYPAL_ENVIRONMENT` selain `sandbox` ditolak sebelum request apa pun dikirim, dan klien menerima `502 PAYMENT_PROVIDER_ERROR`.
 
@@ -395,9 +399,9 @@ Tanpa body. `sent` → `approved`. Idempoten untuk `approved`/`paid`; `409` untu
 
 ### `POST /api/public/proposals/:token/paypal/orders`
 
-Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. `409 CONFLICT` juga dikembalikan jika ada pembayaran `REVIEW` ("needs review and cannot be replaced automatically") atau capture yang masih diproses.
+Tanpa body (body apa pun diabaikan). Proposal harus `approved` (`409` jika belum atau sudah `paid`). Order terbuka yang masih berlaku dipakai ulang. `409 CONFLICT` juga dikembalikan jika ada pembayaran `REVIEW` yang ordernya belum `COMPLETED` di PayPal ("needs review and cannot be replaced automatically") atau capture yang masih diproses.
 
-Jika order terbuka ternyata sudah di-capture di PayPal, misalnya tab klien tertutup sebelum capture tercatat, endpoint ini mencatatnya tanpa mengirim capture lagi, lalu menjawab `409` ("already paid") dan tidak membuat order baru. Jika pencatatan gagal, responsnya `502`. Karena satu kode `409` punya beberapa sebab, Frontend sebaiknya membaca ulang status proposal, bukan menafsirkan isi `message`.
+Jika order terbuka atau order `REVIEW` ternyata sudah di-capture di PayPal, misalnya tab klien tertutup sebelum capture tercatat, endpoint ini mencatatnya tanpa mengirim capture lagi, lalu menjawab `409` ("already paid") dan tidak membuat order baru. Jika pencatatan gagal, responsnya `502`. Karena satu kode `409` punya beberapa sebab, Frontend sebaiknya membaca ulang status proposal, bukan menafsirkan isi `message`.
 
 Respons `201`:
 

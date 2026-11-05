@@ -196,6 +196,17 @@ describe("getProposalForUser", () => {
       { position: 0, title: "Pages", description: null, estimatedHours: new Prisma.Decimal(10), hourlyRateCents: 5_000, amountCents: 50_000 },
       { position: 1, title: "Form", description: "Email", estimatedHours: new Prisma.Decimal(2.5), hourlyRateCents: 6_000, amountCents: 15_000 },
     ],
+    payments: [] as Array<{ id: string }>,
+  });
+
+  it("tells the owner when a payment is under review, without exposing payment data", async () => {
+    db.proposal.findFirst.mockResolvedValue({ ...storedProposal(), payments: [{ id: "payment-row-id" }] });
+    const proposal = await getProposalForUser(user, proposalId);
+    expect(proposal.paymentUnderReview).toBe(true);
+    expect(JSON.stringify(proposal)).not.toContain("payment-row-id");
+
+    db.proposal.findFirst.mockResolvedValue(storedProposal());
+    expect((await getProposalForUser(user, proposalId)).paymentUnderReview).toBe(false);
   });
 
   it("loads the proposal only for its owner and returns the full contract", async () => {

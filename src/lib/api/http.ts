@@ -60,17 +60,34 @@ export function errorResponse(error: ApiError) {
   return Response.json(body, { status: error.status });
 }
 
-// Reads the request body as JSON (with a size limit) and validates it.
-export async function parseJsonBody<S extends z.ZodType>(request: Request, schema: S): Promise<z.output<S>> {
+// Reads the body as text, stopping as soon as the limit is passed. Chunked
+// requests declare no Content-Length, so the limit is enforced while streaming.
+export async function readBodyWithLimit(request: Request): Promise<string> {
   const declaredLength = Number(request.headers.get("content-length") ?? 0);
   if (declaredLength > MAX_JSON_BODY_BYTES) {
     throw new ApiError("PAYLOAD_TOO_LARGE", "Request body is too large");
   }
+  if (!request.body) return "";
 
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BODY_BYTES) {
-    throw new ApiError("PAYLOAD_TOO_LARGE", "Request body is too large");
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    received += value.byteLength;
+    if (received > MAX_JSON_BODY_BYTES) {
+      await reader.cancel();
+      throw new ApiError("PAYLOAD_TOO_LARGE", "Request body is too large");
+    }
+    text += decoder.decode(value, { stream: true });
   }
+}
+
+// Reads the request body as JSON (with a size limit) and validates it.
+export async function parseJsonBody<S extends z.ZodType>(request: Request, schema: S): Promise<z.output<S>> {
+  const text = await readBodyWithLimit(request);
 
   let json: unknown;
   try {

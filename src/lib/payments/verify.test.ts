@@ -27,7 +27,7 @@ function completedOrder(overrides: Partial<PaypalOrder> = {}, capture: Record<st
         },
       },
     ],
-    payer: { payer_id: "QYR5Z8XDVJNXQ", email_address: "payer@example.com" },
+    payer: { payer_id: "QYR5Z8XDVJNXQ" },
     ...overrides,
   };
 }
