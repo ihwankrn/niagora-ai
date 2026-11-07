@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api/http";
 
@@ -17,15 +16,22 @@ const modelOutput = {
   assumptions: ["Hosting is provided by the client."],
 };
 
-function fakeClient(response: unknown) {
-  const parse = vi.fn().mockResolvedValue(response);
-  return { client: { beta: { messages: { parse } } } as unknown as Pick<Anthropic, "beta">, parse };
+const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+const completion = (content: string | null, finishReason = "stop") =>
+  json(200, { model: BRIEF_ANALYSIS_MODEL, choices: [{ finish_reason: finishReason, message: { content } }] });
+
+function fakeFetch(...responses: Array<Response | Error>) {
+  const fn = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    if (response instanceof Error) fn.mockRejectedValueOnce(response);
+    else fn.mockResolvedValueOnce(response);
+  }
+  return fn;
 }
 
-function failingClient(error: unknown) {
-  const parse = vi.fn().mockRejectedValue(error);
-  return { beta: { messages: { parse } } } as unknown as Pick<Anthropic, "beta">;
-}
+const requestBody = (fn: ReturnType<typeof fakeFetch>) => JSON.parse(String(fn.mock.calls[0][1]?.body));
 
 const input = { brief: "I need a 5 page company profile website for my catering business.", serviceType: "web_development" as const };
 
@@ -38,6 +44,7 @@ async function expectAiUnavailable(promise: Promise<unknown>) {
   expect((error as ApiError).code).toBe("AI_UNAVAILABLE");
 }
 
+beforeEach(() => vi.stubEnv("GROQ_API_KEY", "gsk_test_key"));
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -96,66 +103,111 @@ describe("sumHours", () => {
 });
 
 describe("analyzeBrief", () => {
-  it("sends a structured-output request with fallbacks and the brief wrapped as data", async () => {
-    const { client, parse } = fakeClient({ stop_reason: "end_turn", parsed_output: modelOutput, model: BRIEF_ANALYSIS_MODEL });
-    const result = await analyzeBrief(input, client);
+  it("sends a strict structured-output request to Groq with the brief wrapped as data", async () => {
+    const fetchImpl = fakeFetch(completion(JSON.stringify(modelOutput)));
 
-    const params = parse.mock.calls[0][0];
-    expect(params.model).toBe("claude-opus-5-5");
-    expect(params.fallbacks).toBe("default");
-    expect(params.betas).toEqual(["server-side-fallback-2026-07-01"]);
-    expect(params.output_config.format).toBeDefined();
-    expect(params.messages[0].content).toContain(`<client_brief>\n${input.brief}\n</client_brief>`);
-    expect(params.system).toMatch(/Never include prices/);
+    const result = await analyzeBrief(input, fetchImpl);
+
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toBe("https://api.groq.com/openai/v1/chat/completions");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer gsk_test_key");
+    const body = requestBody(fetchImpl);
+    expect(body.model).toBe("openai/gpt-oss-120b");
+    expect(body.response_format.type).toBe("json_schema");
+    expect(body.response_format.json_schema.strict).toBe(true);
+    expect(body.messages[0]).toMatchObject({ role: "system", content: expect.stringMatching(/Never include prices/) });
+    expect(body.messages[1].content).toContain(`<client_brief>\n${input.brief}\n</client_brief>`);
 
     expect(result.totalEstimatedHours).toBe(12.33);
     expect(result.model).toBe(BRIEF_ANALYSIS_MODEL);
   });
 
-  it("does not request any price field from the model", async () => {
-    const { client, parse } = fakeClient({ stop_reason: "end_turn", parsed_output: modelOutput, model: BRIEF_ANALYSIS_MODEL });
-    await analyzeBrief(input, client);
-    const schemaText = JSON.stringify(parse.mock.calls[0][0].output_config.format);
-    expect(schemaText).not.toMatch(/price|rate|amount|total|cents|currency/i);
+  it("requests a schema that meets Groq's strict-mode rules and has no price field", async () => {
+    const fetchImpl = fakeFetch(completion(JSON.stringify(modelOutput)));
+    await analyzeBrief(input, fetchImpl);
+
+    const { schema } = requestBody(fetchImpl).response_format.json_schema;
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["summary", "deliverables", "clarificationQuestions", "assumptions"]);
+    expect(schema.properties.deliverables.items.additionalProperties).toBe(false);
+    expect(schema.properties.deliverables.items.required).toEqual(["title", "description", "estimatedHours"]);
+    expect(JSON.stringify(schema)).not.toMatch(/price|rate|amount|total|cents|currency/i);
   });
 
-  it("maps a refusal to AI_UNAVAILABLE", async () => {
-    const { client } = fakeClient({ stop_reason: "refusal", parsed_output: null, model: BRIEF_ANALYSIS_MODEL });
-    await expectAiUnavailable(analyzeBrief(input, client));
-  });
-
-  it("maps truncated or unparsed output to AI_UNAVAILABLE", async () => {
+  it("maps truncated, empty, malformed or wrongly shaped output to AI_UNAVAILABLE", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     for (const response of [
-      { stop_reason: "max_tokens", parsed_output: modelOutput, model: BRIEF_ANALYSIS_MODEL },
-      { stop_reason: "end_turn", parsed_output: null, model: BRIEF_ANALYSIS_MODEL },
+      completion(JSON.stringify(modelOutput), "length"),
+      completion(null),
+      completion("{not json"),
+      completion(JSON.stringify({ summary: "No lists" })),
+      json(200, { choices: [] }),
     ]) {
-      await expectAiUnavailable(analyzeBrief(input, fakeClient(response).client));
+      await expectAiUnavailable(analyzeBrief(input, fakeFetch(response)));
     }
   });
 
-  it("maps SDK errors to AI_UNAVAILABLE without leaking details", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await expectAiUnavailable(analyzeBrief(input, failingClient(new Anthropic.APIConnectionError({ message: "socket hang up" }))));
-    await expectAiUnavailable(analyzeBrief(input, failingClient(new Error("boom"))));
+  it("retries a temporary failure, then succeeds", async () => {
+    const fetchImpl = fakeFetch(json(503, {}, { "retry-after": "0" }), completion(JSON.stringify(modelOutput)));
+
+    await expect(analyzeBrief(input, fetchImpl)).resolves.toMatchObject({ totalEstimatedHours: 12.33 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("returns a structured AI_UNAVAILABLE error when the API key is missing", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
+  it("does not retry a rate limit with a long wait or a rejected key", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const error = await analyzeBrief(input).then(
-      () => undefined,
-      (reason: unknown) => reason,
-    );
-
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({
-      code: "AI_UNAVAILABLE",
-      status: 502,
-      message: "The brief could not be analyzed. Please try again.",
+    const limited = fakeFetch(json(429, { error: { type: "rate_limit", message: "secret detail" } }, { "retry-after": "60" }));
+    await expectAiUnavailable(analyzeBrief(input, limited));
+    expect(limited).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenLastCalledWith("Brief analysis provider request failed", {
+      provider: "groq",
+      category: "rate_limited",
+      status: 429,
+      apiErrorType: "rate_limit",
     });
+
+    const rejected = fakeFetch(json(401, { error: { type: "invalid_api_key" } }));
+    await expectAiUnavailable(analyzeBrief(input, rejected));
+    expect(rejected).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenLastCalledWith("Brief analysis provider request failed", {
+      provider: "groq",
+      category: "authentication_failed",
+      status: 401,
+      apiErrorType: "invalid_api_key",
+    });
+  });
+
+  it("gives up after repeated connection failures without leaking details", async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchImpl = fakeFetch(new Error("socket hang up"), new Error("socket hang up"), new Error("socket hang up"));
+
+    const pending = expectAiUnavailable(analyzeBrief(input, fetchImpl));
+    await vi.runAllTimersAsync();
+    await pending;
+    vi.useRealTimers();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/socket hang up|gsk_test_key|catering/);
+  });
+
+  it("never logs the key or the brief when a request fails", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expectAiUnavailable(analyzeBrief(input, fakeFetch(json(400, { error: { type: "invalid_request_error", message: input.brief } }))));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/gsk_test_key|catering/);
+  });
+
+  it("sends nothing when the API key is missing", async () => {
+    vi.stubEnv("GROQ_API_KEY", "");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchImpl = fakeFetch();
+
+    await expectAiUnavailable(analyzeBrief(input, fetchImpl));
+
+    expect(fetchImpl).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Brief analysis provider request failed", {
-      provider: "anthropic",
+      provider: "groq",
       category: "missing_configuration",
     });
   });

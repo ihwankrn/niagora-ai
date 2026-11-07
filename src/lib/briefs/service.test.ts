@@ -35,7 +35,7 @@ beforeEach(() => {
 
 describe("analyzeAndStoreBrief", () => {
   it("stores the brief for the signed-in user and returns the contract shape", async () => {
-    ai.analyzeBrief.mockResolvedValue({ analysis, totalEstimatedHours: 10, model: "claude-opus-5-5" });
+    ai.analyzeBrief.mockResolvedValue({ analysis, totalEstimatedHours: 10, model: "openai/gpt-oss-120b" });
 
     const result = await analyzeAndStoreBrief(user, input);
 
@@ -44,7 +44,7 @@ describe("analyzeAndStoreBrief", () => {
     });
     expect(db.brief.update).toHaveBeenCalledWith({
       where: { id: "33333333-3333-4333-8333-333333333333" },
-      data: { status: "ANALYZED", analysis, aiModel: "claude-opus-5-5" },
+      data: { status: "ANALYZED", analysis, aiModel: "openai/gpt-oss-120b" },
     });
     expect(result).toEqual({
       briefId: "33333333-3333-4333-8333-333333333333",
@@ -77,7 +77,7 @@ describe("analyzeAndStoreBrief", () => {
   });
 
   it("takes the user row lock before counting", async () => {
-    ai.analyzeBrief.mockResolvedValue({ analysis, totalEstimatedHours: 10, model: "claude-opus-5-5" });
+    ai.analyzeBrief.mockResolvedValue({ analysis, totalEstimatedHours: 10, model: "openai/gpt-oss-120b" });
 
     await analyzeAndStoreBrief(user, input);
 

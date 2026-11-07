@@ -216,7 +216,7 @@ export default function NewProposalPage() {
             code: "AI_UNAVAILABLE",
             message:
               serverMessage ||
-              "Layanan AI Claude sedang tidak dapat diakses atau kuota saldo Anthropic pada backend sedang tidak mencukupi (502 Bad Gateway).",
+              "Layanan AI sedang tidak dapat diakses. Silakan coba lagi beberapa saat lagi (502 Bad Gateway).",
           });
         } else if (response.status === 400) {
           setApiError({
