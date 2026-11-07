@@ -14,7 +14,7 @@ Status implementasi:
 
 | Endpoint | Kontrak | Implementasi |
 |---|---|---|
-| `POST /api/briefs/analyze` | ✅ disepakati | Route handler ada, unit-tested; belum diuji live (Claude + sesi login) |
+| `POST /api/briefs/analyze` | ✅ disepakati | Route handler ada, unit-tested; belum diuji live lewat browser (Groq + sesi login) |
 | `POST /api/quotes/calculate` | ✅ disepakati | ✅ Route handler ada, unit-tested, 401 diuji live |
 | `POST /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
 | `GET /api/proposals` | ✅ disepakati | ✅ Route handler ada, unit-tested, query diuji ke Supabase, 401 diuji live |
@@ -136,7 +136,7 @@ Error khusus:
 - `429 RATE_LIMITED` — maksimal 20 analisis per user per jam (termasuk percobaan yang gagal).
 - `502 AI_UNAVAILABLE` — LLM gagal, menolak, atau output tidak lolos validasi. Brief tetap tersimpan dengan status `FAILED`; tampilkan tombol coba lagi.
 
-Catatan implementasi: analisis memakai Claude (`claude-opus-5-5`) dengan structured output. Server menetapkan `id`, membulatkan jam ke 2 desimal, membuang deliverable tanpa estimasi yang wajar, lalu memvalidasi hasil dengan schema kontrak sebelum menyimpan.
+Catatan implementasi: analisis memakai Groq (`openai/gpt-oss-120b`) dengan structured output strict. Isi brief dikirim ke Groq, yang secara default tidak menyimpan input kecuali log pemantauan penyalahgunaan sampai 30 hari; Zero Data Retention bisa diaktifkan di Data Controls Groq. Server menetapkan `id`, membulatkan jam ke 2 desimal, membuang deliverable tanpa estimasi yang wajar, lalu memvalidasi hasil dengan schema kontrak sebelum menyimpan.
 
 ---
 
