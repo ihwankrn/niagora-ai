@@ -34,6 +34,19 @@ enum ProposalStatus {
   REJECTED
   PAID
   CANCELLED
+  // Billed by a sent PayPal invoice. Checkout is closed until the invoice is
+  // paid (-> PAID) or cancelled (-> APPROVED).
+  INVOICED
+}
+
+enum InvoiceStatus {
+  // Reserved locally; the PayPal invoice is being created and sent.
+  SENDING
+  SENT
+  PAID
+  CANCELLED
+  // Creating or sending at PayPal failed; nothing was sent to the client.
+  FAILED
 }
 
 enum PaymentProvider {
@@ -109,6 +122,7 @@ model Proposal {
   brief    Brief?         @relation(fields: [briefId], references: [id], onDelete: SetNull)
   items    ProposalItem[]
   payments Payment[]
+  invoices PaypalInvoice[]
 
   @@index([userId, createdAt])
   @@index([briefId])
@@ -159,4 +173,26 @@ model Payment {
 
   @@index([proposalId])
   @@map("payments")
+}
+
+// A PayPal invoice sent by the billing agent. Amounts are copied from the
+// proposal by the server; the AI model never supplies them.
+model PaypalInvoice {
+  id              String        @id @default(uuid()) @db.Uuid
+  proposalId      String        @map("proposal_id") @db.Uuid
+  status          InvoiceStatus @default(SENDING)
+  amountCents     Int           @map("amount_cents")
+  currency        String        @db.Char(3)
+  paypalInvoiceId String?       @unique @map("paypal_invoice_id")
+  invoiceNumber   String?       @map("invoice_number")
+  // PayPal's page where the client views and pays the invoice.
+  payerViewUrl    String?       @map("payer_view_url")
+  paidAt          DateTime?     @map("paid_at") @db.Timestamptz(3)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  proposal Proposal @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+
+  @@index([proposalId])
+  @@map("paypal_invoices")
 }
