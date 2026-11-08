@@ -24,7 +24,8 @@ Status implementasi:
 | `POST /api/public/proposals/:token/approve` | 🆕 perlu review FE | Unit-tested |
 | `POST /api/public/proposals/:token/paypal/orders` | 🆕 perlu review FE | Unit-tested; belum diuji ke PayPal Sandbox |
 | `POST /api/public/proposals/:token/paypal/capture` | 🆕 perlu review FE | Unit-tested; belum diuji ke PayPal Sandbox |
-| `POST /api/paypal/webhook` | Dipanggil PayPal, bukan Frontend | Unit-tested, rekonsiliasi diuji ke PostgreSQL; belum menerima event nyata dari PayPal |
+| `POST /api/paypal/webhook` | Dipanggil PayPal, bukan Frontend | Unit-tested, rekonsiliasi diuji ke PostgreSQL; juga menerima `INVOICING.INVOICE.PAID`/`CANCELLED` |
+| `POST /api/agent/billing` | 🆕 perlu review FE | Unit-tested; diuji live ke PayPal Sandbox + Groq (kirim, cek, pengingat, batal). Pembayaran invoice belum diuji live |
 
 Sesi browser: `/login` untuk sign-in dan pendaftaran, `/auth/callback` untuk link konfirmasi email, dan tombol **Sign out** di sidebar yang mengakhiri sesi di browser itu saja. Jika kode dari link gagal ditukar, misalnya link dibuka di browser lain, pengguna diarahkan ke `/login?link=failed` untuk sign-in manual.
 
@@ -450,6 +451,72 @@ Kegagalan database setelah pembayaran terverifikasi tidak pernah menghasilkan `2
 Jika database sudah tidak terjangkau saat request baru mulai, responsnya tetap `500 INTERNAL_ERROR`, sebelum capture apa pun dikirim. Aturannya sama: jangan memulai order baru.
 
 ---
+
+## `POST /api/agent/billing` — AI billing agent (🆕 perlu review Frontend)
+
+Asisten penagihan untuk freelancer yang login. Model AI (Groq `openai/gpt-oss-120b`, tool calling) memilih tindakan; server menjalankannya lewat **PayPal Agent Toolkit** (Invoicing API, Sandbox).
+
+**Aturan keamanan**
+- Tool yang dilihat model hanya menerima `proposal_id`, catatan opsional, dan email klien (hanya jika proposal belum punya). **Model tidak pernah mengisi nominal, item, penerima tagihan, atau invoice id**; semuanya diambil server dari proposal milik user yang login.
+- Invoice hanya bisa dikirim untuk proposal `approved`. Saat terkirim, status proposal menjadi `invoiced` sehingga checkout PayPal di link klien tertutup (klien tidak bisa membayar dua kali). Membatalkan invoice mengembalikan status ke `approved`.
+- Sebelum dikirim, invoice dibaca ulang dari PayPal dan harus cocok dengan total proposal; jika tidak, draft dihapus dan tidak ada yang terkirim.
+- Invoice dihitung lunas hanya jika PayPal melaporkan `PAID` dengan nominal penuh. Saat itu dibuat baris `payments` `COMPLETED` (kolom `paypal_order_id` berisi invoice id) sehingga pendapatan dashboard ikut bertambah.
+
+### Request
+
+```json
+{
+  "messages": [
+    { "role": "user", "content": "Kirim invoice PayPal untuk proposal catering, jatuh tempo minggu ini" }
+  ]
+}
+```
+
+- Browser menyimpan riwayat percakapan dan mengirimnya setiap giliran (maks. 12 pesan, masing-masing maks. 2.000 karakter). Pesan terakhir harus `role: "user"`. Server tidak menyimpan chat.
+
+### Response `200`
+
+```json
+{
+  "data": {
+    "reply": "Invoice 0007 sebesar 1,325.00 USD sudah dikirim ke klien. Link pembayaran: https://www.sandbox.paypal.com/invoice/p/#...",
+    "actions": [
+      {
+        "tool": "send_invoice",
+        "proposalId": "33333333-3333-4333-8333-333333333333",
+        "ok": true,
+        "summary": "Sent invoice 0007 (1325.00 USD)",
+        "invoice": {
+          "proposalId": "33333333-3333-4333-8333-333333333333",
+          "status": "sent",
+          "invoiceNumber": "0007",
+          "amountCents": 132500,
+          "currency": "USD",
+          "payerViewUrl": "https://www.sandbox.paypal.com/invoice/p/#...",
+          "paidAt": null
+        }
+      }
+    ],
+    "model": "openai/gpt-oss-120b"
+  }
+}
+```
+
+- `actions`: tindakan yang benar-benar dijalankan server pada giliran ini (`send_invoice`, `check_invoice`, `remind_invoice`, `cancel_invoice`). `ok: false` berarti gagal; `summary` berisi alasan yang aman ditampilkan.
+- `invoice.status`: `sending` | `sent` | `paid` | `cancelled` | `failed`.
+- Status proposal baru: `invoiced` (ditagih lewat invoice PayPal). Frontend sebaiknya menampilkannya sebagai "Invoiced".
+
+### Error
+
+| Kode | Kapan |
+|---|---|
+| `400 VALIDATION_ERROR` | Format `messages` salah |
+| `401 UNAUTHORIZED` | Tidak login |
+| `502 AI_UNAVAILABLE` | Groq gagal atau tidak tersedia |
+
+Kegagalan PayPal di tengah percakapan tidak membuat request gagal: agent melaporkannya di `reply` dan di `actions[].ok = false`.
+
+**Webhook:** tambahkan event **Invoicing invoice paid** dan **Invoicing invoice cancelled** pada webhook Sandbox agar status lunas tercatat otomatis. Tanpa itu, status tetap diperbarui saat agent menjalankan `check_invoice`.
 
 ## Pengujian integrasi PostgreSQL
 
