@@ -2,7 +2,7 @@
 
 AI-powered freelance business copilot that transforms client briefs into structured proposals, transparent estimates, and PayPal payments.
 
-**Live demo:** https://niagora-ai-gamma.vercel.app
+**Live demo:** (https://niagora-ai-gamma.vercel.app)
 
 Payments run in **PayPal Sandbox** only. No real money moves.
 
