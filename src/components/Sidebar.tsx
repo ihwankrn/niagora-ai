@@ -73,7 +73,7 @@ export default function Sidebar({
       id: "payments",
       href: "/#payments",
       label: "Payments",
-      badge: "Pending",
+      badge: "Connected",
       icon: (
         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path
@@ -182,13 +182,13 @@ export default function Sidebar({
             <span className="text-[11px] font-bold text-slate-800">
               PayPal Sandbox
             </span>
-            <span className="flex items-center gap-1 text-[10px] text-amber-700 font-medium">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-              Pending
+            <span className="flex items-center gap-1 text-[10px] text-emerald-700 font-medium">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Connected
             </span>
           </div>
           <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-            AI proposal workflow with PayPal sandbox integration planned.
+            Sandbox checkout with verified payments.
           </p>
         </div>
 
@@ -199,10 +199,10 @@ export default function Sidebar({
           </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-semibold text-slate-800">
-              Freelancer Pro
+              Niagora AI
             </p>
             <p className="truncate text-[10px] text-slate-400">
-              workspace@niagora.ai
+              Workspace
             </p>
           </div>
         </div>

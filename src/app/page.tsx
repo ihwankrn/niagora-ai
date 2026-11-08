@@ -359,8 +359,8 @@ export default function Home() {
             {/* Header Right Actions */}
             <div className="flex items-center gap-3">
               <div className="hidden items-center gap-2 rounded-full border border-slate-200/90 bg-slate-50/80 px-3 py-1.5 text-xs font-medium text-slate-600 md:flex">
-                <span className="h-2 w-2 rounded-full bg-amber-500" />
-                <span>PayPal Sandbox — Integration Pending</span>
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span>PayPal Sandbox — Connected</span>
               </div>
 
               <Link
@@ -395,7 +395,7 @@ export default function Home() {
                   <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
                     Transform unstructured client briefs into detailed scope
                     breakdowns, realistic hours, ready-to-sign proposals, and
-                    planned PayPal checkout verification.
+                    PayPal checkout and verified payments.
                   </p>
                 </div>
 
@@ -763,8 +763,8 @@ export default function Home() {
                       <span className="text-slate-400">Draft mode</span>
                     </div>
                     <div className="flex items-center justify-between rounded-xl bg-white/5 p-3 text-xs border border-white/5">
-                      <span className="text-slate-300">4. PayPal Escrow</span>
-                      <span className="font-semibold text-indigo-300">
+                      <span className="text-slate-300">4. PayPal Payment</span>
+                      <span className="font-semibold text-emerald-300">
                         Sandbox Mode
                       </span>
                     </div>
@@ -792,7 +792,7 @@ export default function Home() {
                     <ul className="mt-1.5 space-y-1 text-slate-500">
                       <li>• Wireframes & High-fidelity Prototypes</li>
                       <li>• Frontend responsive components</li>
-                      <li>• PayPal Sandbox integration testing</li>
+                      <li>• PayPal checkout integration testing</li>
                     </ul>
                   </div>
                 </section>
@@ -1037,25 +1037,23 @@ export default function Home() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300">
-                      PAYPAL INTEGRATION
+                    <span className="rounded-md bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+                      PAYPAL SANDBOX
                     </span>
-                    <span className="text-xs text-slate-400">
-                      Sandbox — Integration Pending
-                    </span>
+                    <span className="text-xs text-emerald-300">Connected</span>
                   </div>
                   <h3 className="text-base font-bold text-white">
-                    Planned Payouts & Milestone Protection
+                    Secure Payments & Verification
                   </h3>
                   <p className="max-w-xl text-xs text-slate-300 leading-relaxed">
-                    Niagora AI proposals will connect directly with PayPal checkout once backend contracts are deployed. Planned for secure client approval and milestone payouts.
+                    Clients can pay shared proposals through PayPal checkout. Payments are verified before a proposal is marked as paid.
                   </p>
                 </div>
 
                 <div className="shrink-0">
                   <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-slate-200">
-                    <span className="h-2 w-2 rounded-full bg-amber-400" />
-                    PayPal Sandbox — Integration Pending
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    PayPal Sandbox — Connected
                   </span>
                 </div>
               </div>

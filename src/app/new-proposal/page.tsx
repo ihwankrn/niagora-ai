@@ -305,11 +305,11 @@ export default function NewProposalPage() {
               </nav>
             </div>
 
-            {/* Back to Dashboard Link & Sandbox Tag */}
+            {/* Back to Dashboard Link & Payment Status */}
             <div className="flex items-center gap-3">
               <span className="hidden items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 sm:flex">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                PayPal Sandbox Pending
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                PayPal Sandbox — Connected
               </span>
 
               <Link

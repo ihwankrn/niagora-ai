@@ -35,7 +35,7 @@ const steps: FlowStep[] = [
     number: "04",
     title: "Paid Project",
     subtitle: "PayPal checkout & verification",
-    badge: "Planned integration",
+    badge: "Sandbox Mode",
   },
 ];
 
@@ -52,8 +52,8 @@ export default function TransformationFlow() {
           </p>
         </div>
         <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-slate-700 shadow-2xs backdrop-blur-xs">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-          PayPal Sandbox — Integration Pending
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          PayPal Sandbox — Connected
         </span>
       </div>
 
