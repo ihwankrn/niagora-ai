@@ -291,7 +291,7 @@ export default function NewProposalPage() {
               </button>
 
               {/* Breadcrumb Navigation */}
-              <nav className="flex items-center gap-1.5 text-xs text-slate-400">
+              <nav className="hidden items-center gap-1.5 text-xs text-slate-400 sm:flex">
                 <Link
                   href="/"
                   className="font-medium text-slate-500 hover:text-slate-800 transition"
@@ -317,7 +317,8 @@ export default function NewProposalPage() {
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-slate-900"
               >
                 <span>←</span>
-                <span>Back to Dashboard</span>
+                <span className="hidden sm:inline">Back to Dashboard</span>
+                <span className="sm:hidden">Back</span>
               </Link>
             </div>
           </header>
@@ -417,7 +418,7 @@ export default function NewProposalPage() {
                                 {item.label}
                               </p>
                             </div>
-                            <span className="mt-2 text-[10px] text-slate-400 line-clamp-2">
+                            <span className="mt-2 text-[10px] text-slate-400 line-clamp-3">
                               {item.description}
                             </span>
                           </button>
@@ -564,17 +565,17 @@ export default function NewProposalPage() {
                   </h3>
                   <div className="space-y-2 text-xs text-slate-600">
                     <div className="flex items-start gap-2">
-                      <span className="font-bold text-indigo-600">Step 1:</span>
+                      <span className="whitespace-nowrap font-bold text-indigo-600">Step 1:</span>
                       <span>Validate and deconstruct brief deliverables.</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="font-bold text-indigo-600">Step 2:</span>
+                      <span className="whitespace-nowrap font-bold text-indigo-600">Step 2:</span>
                       <span>
                         Review task items, estimated hours, and client questions.
                       </span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="font-bold text-indigo-600">Step 3:</span>
+                      <span className="whitespace-nowrap font-bold text-indigo-600">Step 3:</span>
                       <span>
                         Generate shareable client link & PayPal checkout.
                       </span>

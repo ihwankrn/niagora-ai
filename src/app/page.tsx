@@ -957,73 +957,109 @@ export default function Home() {
                       </div>
                     </div>
                   ) : (
-                    /* Proposal Table */
-                    <div className="mt-6 overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-2xs">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-xs">
-                          <thead className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                            <tr>
-                              <th scope="col" className="px-4 py-3 sm:px-6">Proposal</th>
-                              <th scope="col" className="px-4 py-3">Client</th>
-                              <th scope="col" className="px-4 py-3">Status</th>
-                              <th scope="col" className="px-4 py-3">Amount</th>
-                              <th scope="col" className="px-4 py-3">Created</th>
-                              <th scope="col" className="px-4 py-3 text-right sm:px-6">Action</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {filteredItems.map((item) => (
-                              <tr
-                                key={item.id}
-                                onClick={() => setSelectedProposal(item)}
-                                className="transition hover:bg-slate-50/80 cursor-pointer"
+                    <>
+                      {/* Proposal cards on mobile */}
+                      <div className="mt-6 space-y-3 sm:hidden">
+                        {filteredItems.map((item) => (
+                          <article
+                            key={item.id}
+                            className="rounded-xl border border-slate-200/90 bg-white p-4 shadow-2xs"
+                          >
+                            <h3 className="break-words text-sm font-semibold text-slate-900">
+                              {item.title}
+                            </h3>
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                              <span
+                                className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ${getStatusBadgeClass(
+                                  item.status
+                                )}`}
                               >
-                                <td className="px-4 py-3.5 font-medium text-slate-900 sm:px-6">
-                                  <span className="font-semibold">{item.title}</span>
-                                </td>
-                                <td className="px-4 py-3.5 text-slate-600">
-                                  {item.clientName || (
-                                    <span className="italic text-slate-400">Not specified</span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-3.5">
-                                  <span
-                                    className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ${getStatusBadgeClass(
-                                      item.status
-                                    )}`}
-                                  >
-                                    {getStatusLabel(item.status)}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3.5 font-semibold text-slate-900">
-                                  {formatCents(item.totalCents, item.currency)}
-                                </td>
-                                <td className="px-4 py-3.5 text-slate-500">
-                                  {new Date(item.createdAt).toLocaleDateString(undefined, {
-                                    month: "short",
-                                    day: "numeric",
-                                    year: "numeric",
-                                  })}
-                                </td>
-                                <td className="px-4 py-3.5 text-right sm:px-6">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedProposal(item);
-                                    }}
-                                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition shadow-2xs"
-                                  >
-                                    <span>Details</span>
-                                    <span>→</span>
-                                  </button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                                {getStatusLabel(item.status)}
+                              </span>
+                              <span className="text-sm font-semibold text-slate-900">
+                                {formatCents(item.totalCents, item.currency)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProposal(item)}
+                              className="mt-3 inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-indigo-600"
+                            >
+                              <span>Details</span>
+                              <span>→</span>
+                            </button>
+                          </article>
+                        ))}
                       </div>
-                    </div>
+
+                      {/* Proposal table from the sm breakpoint up */}
+                      <div className="mt-6 hidden overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-2xs sm:block">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                              <tr>
+                                <th scope="col" className="px-4 py-3 sm:px-6">Proposal</th>
+                                <th scope="col" className="px-4 py-3">Client</th>
+                                <th scope="col" className="px-4 py-3">Status</th>
+                                <th scope="col" className="px-4 py-3">Amount</th>
+                                <th scope="col" className="px-4 py-3">Created</th>
+                                <th scope="col" className="px-4 py-3 text-right sm:px-6">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-slate-700">
+                              {filteredItems.map((item) => (
+                                <tr
+                                  key={item.id}
+                                  onClick={() => setSelectedProposal(item)}
+                                  className="cursor-pointer transition hover:bg-slate-50/80"
+                                >
+                                  <td className="px-4 py-3.5 font-medium text-slate-900 sm:px-6">
+                                    <span className="font-semibold">{item.title}</span>
+                                  </td>
+                                  <td className="px-4 py-3.5 text-slate-600">
+                                    {item.clientName || (
+                                      <span className="italic text-slate-400">Not specified</span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3.5">
+                                    <span
+                                      className={`inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-medium ${getStatusBadgeClass(
+                                        item.status
+                                      )}`}
+                                    >
+                                      {getStatusLabel(item.status)}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3.5 font-semibold text-slate-900">
+                                    {formatCents(item.totalCents, item.currency)}
+                                  </td>
+                                  <td className="px-4 py-3.5 text-slate-500">
+                                    {new Date(item.createdAt).toLocaleDateString(undefined, {
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    })}
+                                  </td>
+                                  <td className="px-4 py-3.5 text-right sm:px-6">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedProposal(item);
+                                      }}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-2xs transition hover:bg-slate-50 hover:text-indigo-600"
+                                    >
+                                      <span>Details</span>
+                                      <span>→</span>
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </>
               )}
