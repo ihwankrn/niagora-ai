@@ -1,9 +1,17 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+// Pages a signed-out visitor may open. Everything else (the dashboard, New
+// Proposal) sends them to /login instead of rendering an empty, failing page.
+// API routes are left alone: they answer 401 themselves.
+function isPublicPath(pathname: string) {
+  return pathname === "/login" || pathname.startsWith("/auth/") || pathname.startsWith("/api/");
+}
+
 // Refreshes the Supabase session before a page or route reads it, because Server
 // Components cannot write cookies. getClaims verifies the token and refreshes it
-// when needed. Access control stays in requireUser.
+// when needed. Access control for data stays in requireUser; the redirect below
+// is only a convenience for page visits.
 export async function proxy(request: NextRequest) {
   // Supabase email links return to the Site URL with ?code=... by default.
   if (request.nextUrl.pathname === "/" && request.nextUrl.searchParams.has("code")) {
@@ -30,7 +38,20 @@ export async function proxy(request: NextRequest) {
       },
     },
   });
-  await supabase.auth.getClaims();
+  const { data } = await supabase.auth.getClaims();
+
+  if (!data?.claims && !isPublicPath(request.nextUrl.pathname)) {
+    const login = request.nextUrl.clone();
+    login.pathname = "/login";
+    login.search = "";
+    const redirect = NextResponse.redirect(login);
+    // Keep any cookie changes, e.g. Supabase clearing an expired session.
+    for (const cookie of response.cookies.getAll()) redirect.cookies.set(cookie);
+    const cacheControl = response.headers.get("cache-control");
+    if (cacheControl) redirect.headers.set("cache-control", cacheControl);
+    return redirect;
+  }
+
   return response;
 }
 
