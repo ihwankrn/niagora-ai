@@ -367,6 +367,12 @@ export default function PublicProposalPayment({
         </p>
       ) : null}
 
+      {proposalStatus === "invoiced" ? (
+        <p role="status" className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          An invoice for this proposal was sent to your email by PayPal. Please pay it from that email.
+        </p>
+      ) : null}
+
       {proposalStatus === "cancelled" ? (
         <p role="status" className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
           Proposal dibatalkan. Pembayaran tidak tersedia.
