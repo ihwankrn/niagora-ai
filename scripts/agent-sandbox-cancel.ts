@@ -1,18 +1,20 @@
 // Asks the billing agent to cancel the demo invoice (live PayPal Sandbox).
-// Usage: npx tsx --conditions=react-server scripts/agent-sandbox-cancel.ts
+// Usage: SMOKE_USER_ID=<your users.id> npx tsx --conditions=react-server scripts/agent-sandbox-cancel.ts
 import "dotenv/config";
 
 import { runBillingAgent } from "@/lib/ai/billing-agent";
 import { prisma } from "@/lib/db";
 
+import { requireSmokeUser } from "./smoke-user";
+
 async function main() {
+  const user = await requireSmokeUser();
   const demo = await prisma.proposal.findFirst({
-    where: { title: "Bakery website (agent demo)", status: "INVOICED" },
+    where: { userId: user.id, title: "Bakery website (agent demo)", status: "INVOICED" },
     orderBy: { createdAt: "desc" },
     select: { id: true, userId: true },
   });
   if (!demo) throw new Error("No invoiced demo proposal");
-  const user = { id: demo.userId, email: "unused@example.invalid" };
 
   const result = await runBillingAgent(user, [
     { role: "user", content: "Cancel the PayPal invoice for the Bakery website (agent demo) proposal. Reason: test run." },

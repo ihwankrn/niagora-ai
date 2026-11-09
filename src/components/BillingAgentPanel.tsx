@@ -45,7 +45,12 @@ export default function BillingAgentPanel({
     setError(null);
     setIsLoading(true);
 
-    const requestMessages = nextMessages.slice(-MAX_AGENT_MESSAGES);
+    // A long earlier reply must not make the next request invalid, so the
+    // history sent back is clipped to the API's per-message limit.
+    const requestMessages = nextMessages.slice(-MAX_AGENT_MESSAGES).map((message) => ({
+      ...message,
+      content: message.content.slice(0, MAX_AGENT_MESSAGE_LENGTH),
+    }));
     try {
       const response = await fetch("/api/agent/billing", {
         method: "POST",

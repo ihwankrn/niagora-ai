@@ -1,7 +1,7 @@
 // Live smoke test of the billing agent against PayPal Sandbox and Groq.
-// Creates one approved demo proposal for the most recent user, then talks to
-// the agent. Prints only the agent replies and action summaries.
-// Usage: npx tsx --conditions=react-server scripts/agent-sandbox-smoke.ts
+// Creates one approved demo proposal for the given user, then talks to the
+// agent. Prints only the agent replies and action summaries.
+// Usage: SMOKE_USER_ID=<your users.id> npx tsx --conditions=react-server scripts/agent-sandbox-smoke.ts
 import "dotenv/config";
 
 import { runBillingAgent } from "@/lib/ai/billing-agent";
@@ -10,10 +10,10 @@ import { prisma } from "@/lib/db";
 import { approveProposal, sendProposal } from "@/lib/payments/service";
 import { createProposal } from "@/lib/proposals/service";
 
+import { requireSmokeUser } from "./smoke-user";
+
 async function main() {
-  const latest = await prisma.proposal.findFirst({ orderBy: { createdAt: "desc" }, select: { userId: true } });
-  if (!latest) throw new Error("No proposals yet");
-  const user = { id: latest.userId, email: "unused@example.invalid" };
+  const user = await requireSmokeUser();
 
   const proposal = await createProposal(user, {
     title: "Bakery website (agent demo)",
