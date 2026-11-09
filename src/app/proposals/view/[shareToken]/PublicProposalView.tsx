@@ -26,6 +26,11 @@ function getStatusBadge(status: ProposalStatus) {
         label: "Awaiting Client Acceptance",
         className: "border-blue-200 bg-blue-50 text-blue-700",
       };
+    case "invoiced":
+      return {
+        label: "Invoiced",
+        className: "border-sky-200 bg-sky-50 text-sky-700",
+      };
     case "draft":
       return {
         label: "Draft Preview",
