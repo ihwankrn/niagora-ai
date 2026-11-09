@@ -4,6 +4,8 @@ import { ApiError } from "@/lib/api/http";
 
 const service = vi.hoisted(() => ({ assertAuthenticPaypalWebhook: vi.fn(), reconcileCapturedOrder: vi.fn() }));
 vi.mock("@/lib/payments/service", () => service);
+const invoices = vi.hoisted(() => ({ reconcileInvoiceByPaypalId: vi.fn() }));
+vi.mock("@/lib/invoices/service", () => invoices);
 
 const { POST } = await import("./route");
 
@@ -21,6 +23,26 @@ beforeEach(() => {
 });
 
 describe("POST /api/paypal/webhook", () => {
+  it.each([
+    ["INVOICING.INVOICE.PAID", { id: "INV2-AAAA" }],
+    ["INVOICING.INVOICE.CANCELLED", { invoice: { id: "INV2-AAAA" } }],
+  ])("settles our invoice on a verified %s event", async (eventType, resource) => {
+    const response = await post(JSON.stringify({ event_type: eventType, resource }));
+
+    expect(response.status).toBe(200);
+    expect(invoices.reconcileInvoiceByPaypalId).toHaveBeenCalledWith("INV2-AAAA");
+    expect(service.reconcileCapturedOrder).not.toHaveBeenCalled();
+  });
+
+  it("never touches invoices for an event that fails verification", async () => {
+    service.assertAuthenticPaypalWebhook.mockRejectedValue(new ApiError("UNAUTHORIZED", "Invalid webhook signature"));
+
+    const response = await post(JSON.stringify({ event_type: "INVOICING.INVOICE.PAID", resource: { id: "INV2-AAAA" } }));
+
+    expect(response.status).toBe(401);
+    expect(invoices.reconcileInvoiceByPaypalId).not.toHaveBeenCalled();
+  });
+
   it("verifies the exact raw body, then reconciles the order", async () => {
     const raw = JSON.stringify(capture, null, 2);
 

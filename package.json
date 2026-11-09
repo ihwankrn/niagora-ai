@@ -20,6 +20,7 @@
     "sandbox:cookie": "tsx scripts/sandbox-session-cookie.ts"
   },
   "dependencies": {
+    "@paypal/agent-toolkit": "^1.11.0",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/client": "7.10.1",
     "@supabase/ssr": "0.12.7",
@@ -45,5 +46,10 @@
     "tsx": "4.23.15",
     "typescript": "^5",
     "vitest": "5.0.5"
+  },
+  "overrides": {
+    "@paypal/agent-toolkit": {
+      "mathjs": "^15.2.0"
+    }
   }
 }

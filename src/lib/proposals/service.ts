@@ -24,6 +24,7 @@ export const STATUS_FROM_DB: Record<DbProposalStatus, ProposalStatus> = {
   REJECTED: "rejected",
   PAID: "paid",
   CANCELLED: "cancelled",
+  INVOICED: "invoiced",
 };
 
 // Only payments that were captured and then verified against the PayPal API

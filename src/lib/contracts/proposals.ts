@@ -3,7 +3,7 @@ import { z } from "zod";
 import { centsSchema, currencySchema, isoDateTimeSchema, optionalTextSchema, titleSchema, uuidSchema } from "./common";
 import { quoteInputFields, quoteSchema } from "./quotes";
 
-export const PROPOSAL_STATUSES = ["draft", "sent", "approved", "rejected", "paid", "cancelled"] as const;
+export const PROPOSAL_STATUSES = ["draft", "sent", "approved", "rejected", "paid", "cancelled", "invoiced"] as const;
 export const proposalStatusSchema = z.enum(PROPOSAL_STATUSES);
 export type ProposalStatus = z.infer<typeof proposalStatusSchema>;
 
